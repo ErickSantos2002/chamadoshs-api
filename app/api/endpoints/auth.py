@@ -53,7 +53,7 @@ def login(credentials: LoginRequest, db: Session = Depends(get_db)):
     # Criar token JWT
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = criar_token_acesso(
-        data={"sub": usuario.id, "nome": usuario.nome, "role": role_nome},
+        data={"sub": str(usuario.id), "nome": usuario.nome, "role": role_nome},
         expires_delta=access_token_expires
     )
 
@@ -102,7 +102,7 @@ def registrar_usuario(usuario_data: UsuarioCreate, db: Session = Depends(get_db)
     # Criar token JWT
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = criar_token_acesso(
-        data={"sub": novo_usuario.id, "nome": novo_usuario.nome, "role": role_nome},
+        data={"sub": str(novo_usuario.id), "nome": novo_usuario.nome, "role": role_nome},
         expires_delta=access_token_expires
     )
 
@@ -164,7 +164,7 @@ def refresh_token(current_user: Usuario = Depends(get_current_user), db: Session
     # Criar novo token
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = criar_token_acesso(
-        data={"sub": current_user.id, "nome": current_user.nome, "role": role_nome},
+        data={"sub": str(current_user.id), "nome": current_user.nome, "role": role_nome},
         expires_delta=access_token_expires
     )
 
