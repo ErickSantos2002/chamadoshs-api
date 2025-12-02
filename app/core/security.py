@@ -11,15 +11,23 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 def verificar_senha(senha_plana: str, senha_hash: str) -> bool:
     """
     Verifica se a senha plana corresponde ao hash
+    Trunca para 72 bytes (limite do bcrypt)
     """
-    return pwd_context.verify(senha_plana, senha_hash)
+    # Truncar para 72 bytes (limite do bcrypt)
+    senha_bytes = senha_plana.encode('utf-8')[:72]
+    senha_truncada = senha_bytes.decode('utf-8', errors='ignore')
+    return pwd_context.verify(senha_truncada, senha_hash)
 
 
 def gerar_hash_senha(senha: str) -> str:
     """
     Gera hash bcrypt da senha
+    Trunca para 72 bytes (limite do bcrypt)
     """
-    return pwd_context.hash(senha)
+    # Truncar para 72 bytes (limite do bcrypt)
+    senha_bytes = senha.encode('utf-8')[:72]
+    senha_truncada = senha_bytes.decode('utf-8', errors='ignore')
+    return pwd_context.hash(senha_truncada)
 
 
 def criar_token_acesso(data: dict, expires_delta: Optional[timedelta] = None) -> str:
