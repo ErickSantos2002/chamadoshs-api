@@ -11,11 +11,12 @@ class UsuarioBase(BaseModel):
 
 
 class UsuarioCreate(UsuarioBase):
-    pass
+    senha: str
 
 
 class UsuarioUpdate(BaseModel):
     nome: Optional[str] = None
+    senha: Optional[str] = None
     setor_id: Optional[int] = None
     role_id: Optional[int] = None
     ativo: Optional[bool] = None

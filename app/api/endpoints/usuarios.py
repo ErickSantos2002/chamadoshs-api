@@ -5,6 +5,7 @@ from typing import List
 from app.api.deps import get_db
 from app.models.usuario import Usuario
 from app.schemas.usuario import UsuarioCreate, UsuarioUpdate, UsuarioResponse
+from app.core.security import gerar_hash_senha
 
 router = APIRouter()
 
@@ -50,7 +51,22 @@ def criar_usuario(usuario_data: UsuarioCreate, db: Session = Depends(get_db)):
     """
     Cria um novo usuário
     """
-    usuario = Usuario(**usuario_data.model_dump())
+    # Verifica se já existe usuário com esse nome
+    usuario_existente = db.query(Usuario).filter(Usuario.nome == usuario_data.nome).first()
+    if usuario_existente:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Usuário com nome '{usuario_data.nome}' já existe"
+        )
+
+    # Cria dicionário com os dados, excluindo a senha em texto plano
+    usuario_dict = usuario_data.model_dump(exclude={'senha'})
+
+    # Gera hash da senha e adiciona ao dicionário
+    usuario_dict['senha_hash'] = gerar_hash_senha(usuario_data.senha)
+
+    # Cria o usuário com senha hasheada
+    usuario = Usuario(**usuario_dict)
     db.add(usuario)
     db.commit()
     db.refresh(usuario)
@@ -71,6 +87,12 @@ def atualizar_usuario(
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
     update_data = usuario_data.model_dump(exclude_unset=True)
+
+    # Se está atualizando a senha, gera o hash
+    if 'senha' in update_data:
+        senha_hash = gerar_hash_senha(update_data.pop('senha'))
+        update_data['senha_hash'] = senha_hash
+
     for field, value in update_data.items():
         setattr(usuario, field, value)
 
