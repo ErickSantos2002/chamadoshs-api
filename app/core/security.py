@@ -52,7 +52,18 @@ def decodificar_token(token: str) -> Optional[dict]:
     Decodifica e valida um token JWT
     """
     try:
+        print(f"🔵 [Security] Decodificando token...")
+        print(f"🔵 [Security] SECRET_KEY length: {len(settings.SECRET_KEY)}")
+        print(f"🔵 [Security] ALGORITHM: {settings.ALGORITHM}")
+        print(f"🔵 [Security] Token: {token[:50]}...")
+
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+
+        print(f"✅ [Security] Token decodificado com sucesso!")
+        print(f"✅ [Security] Payload: {payload}")
+
         return payload
-    except JWTError:
+    except JWTError as e:
+        print(f"❌ [Security] Erro ao decodificar token: {type(e).__name__}")
+        print(f"❌ [Security] Mensagem: {str(e)}")
         return None

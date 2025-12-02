@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.api.endpoints import auth, chamados, usuarios, comentarios, setores, categorias, historico
+from app.api.endpoints import auth, chamados, usuarios, comentarios, setores, categorias, historico, diagnostico
 
 # Criar aplicação FastAPI
 app = FastAPI(
@@ -81,6 +81,13 @@ app.include_router(
     historico.router,
     prefix="/api/v1/historico",
     tags=["Histórico"]
+)
+
+# Diagnóstico (público - para debug)
+app.include_router(
+    diagnostico.router,
+    prefix="/api/v1/diagnostico",
+    tags=["Diagnóstico"]
 )
 
 
