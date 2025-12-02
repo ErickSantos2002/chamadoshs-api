@@ -21,10 +21,12 @@ router = APIRouter()
 @router.post("/login", response_model=TokenResponse)
 def login(credentials: LoginRequest, db: Session = Depends(get_db)):
     """
-    Endpoint de login - retorna token JWT
+    Endpoint de login - retorna token JWT (case-insensitive)
     """
-    # Buscar usuário pelo nome (username)
-    usuario = db.query(Usuario).filter(Usuario.nome == credentials.nome).first()
+    # Buscar usuário pelo nome (case-insensitive)
+    usuario = db.query(Usuario).filter(
+        Usuario.nome.ilike(credentials.nome)
+    ).first()
 
     if not usuario:
         raise HTTPException(
