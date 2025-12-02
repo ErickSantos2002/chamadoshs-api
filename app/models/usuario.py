@@ -8,7 +8,8 @@ class Usuario(Base):
     __tablename__ = "usuarios"
 
     id = Column(Integer, primary_key=True, index=True)
-    nome = Column(String(255), nullable=False)
+    nome = Column(String(255), nullable=False, unique=True)  # Username para login
+    senha_hash = Column(String(255))
     setor_id = Column(Integer, ForeignKey("setores.id"))
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
     ativo = Column(Boolean, default=True)

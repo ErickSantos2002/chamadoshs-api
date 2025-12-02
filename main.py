@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.api.endpoints import chamados, usuarios, comentarios, setores, categorias, historico
+from app.api.endpoints import auth, chamados, usuarios, comentarios, setores, categorias, historico
 
 # Criar aplicação FastAPI
 app = FastAPI(
@@ -39,6 +39,14 @@ def health_check():
 
 
 # Incluir routers dos endpoints
+
+# Autenticação (público)
+app.include_router(
+    auth.router,
+    prefix="/api/v1/auth",
+    tags=["Autenticação"]
+)
+
 app.include_router(
     chamados.router,
     prefix="/api/v1/chamados",
