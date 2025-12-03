@@ -11,6 +11,13 @@ class PrioridadeEnum(str, Enum):
     CRITICA = "Crítica"
 
 
+class UrgenciaEnum(str, Enum):
+    NAO_URGENTE = "Não Urgente"
+    NORMAL = "Normal"
+    URGENTE = "Urgente"
+    MUITO_URGENTE = "Muito Urgente"
+
+
 class StatusEnum(str, Enum):
     ABERTO = "Aberto"
     EM_ANDAMENTO = "Em Andamento"
@@ -35,6 +42,7 @@ class ChamadoUpdate(BaseModel):
     descricao: Optional[str] = None
     categoria_id: Optional[int] = None
     prioridade: Optional[PrioridadeEnum] = None
+    urgencia: Optional[UrgenciaEnum] = None
     status: Optional[StatusEnum] = None
     tecnico_responsavel_id: Optional[int] = None
     solucao: Optional[str] = None
@@ -47,6 +55,7 @@ class ChamadoResponse(ChamadoBase):
     protocolo: str
     solicitante_id: int
     status: StatusEnum
+    urgencia: Optional[UrgenciaEnum] = None
     tecnico_responsavel_id: Optional[int] = None
     solucao: Optional[str] = None
     tempo_resolucao_minutos: Optional[int] = None

@@ -21,8 +21,9 @@ class Chamado(Base):
     titulo = Column(String(255), nullable=False)
     descricao = Column(Text, nullable=False)
 
-    # Prioridade e Status
+    # Prioridade, Urgência e Status
     prioridade = Column(String(20), default='Média')
+    urgencia = Column(String(20), nullable=True)  # Definido por técnicos
     status = Column(String(50), default='Aberto')
 
     # Atendimento
@@ -40,6 +41,7 @@ class Chamado(Base):
     # Constraints
     __table_args__ = (
         CheckConstraint("prioridade IN ('Baixa', 'Média', 'Alta', 'Crítica')", name='chk_prioridade'),
+        CheckConstraint("urgencia IS NULL OR urgencia IN ('Não Urgente', 'Normal', 'Urgente', 'Muito Urgente')", name='chk_urgencia'),
         CheckConstraint("status IN ('Aberto', 'Em Andamento', 'Aguardando', 'Resolvido', 'Fechado')", name='chk_status'),
     )
 
