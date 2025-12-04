@@ -124,9 +124,9 @@ def atualizar_chamado(
             chamado_id=chamado.id,
             usuario_id=usuario_id,
             acao="Alteração de status",
-            descricao=f"Status alterado de {status_anterior} para {chamado_data.status}",
+            descricao=f"Status alterado de {status_anterior} para {chamado_data.status.value}",
             status_anterior=status_anterior,
-            status_novo=chamado_data.status
+            status_novo=chamado_data.status.value
         )
 
     return chamado
