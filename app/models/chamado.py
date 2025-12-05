@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, TIMESTAMP, ForeignKey, Text, CheckConstraint
+from sqlalchemy import Column, Integer, String, TIMESTAMP, ForeignKey, Text, CheckConstraint, Boolean
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.core.database import Base
@@ -34,6 +34,10 @@ class Chamado(Base):
     # Observações e Avaliação
     observacoes = Column(Text)
     avaliacao = Column(Integer, CheckConstraint('avaliacao >= 1 AND avaliacao <= 5'))
+
+    # Flags de controle
+    cancelado = Column(Boolean, default=False, nullable=False)
+    arquivado = Column(Boolean, default=False, nullable=False)
 
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())

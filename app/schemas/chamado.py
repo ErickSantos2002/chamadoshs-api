@@ -61,6 +61,8 @@ class ChamadoResponse(ChamadoBase):
     tempo_resolucao_minutos: Optional[int] = None
     observacoes: Optional[str] = None
     avaliacao: Optional[int] = None
+    cancelado: bool = False
+    arquivado: bool = False
     data_abertura: datetime
     data_atualizacao: datetime
     data_resolucao: Optional[datetime] = None

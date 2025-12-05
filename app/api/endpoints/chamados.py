@@ -18,12 +18,21 @@ def listar_chamados(
     status: str = None,
     solicitante_id: int = None,
     tecnico_id: int = None,
+    incluir_cancelados: bool = False,
+    incluir_arquivados: bool = False,
     db: Session = Depends(get_db)
 ):
     """
-    Lista todos os chamados com filtros opcionais
+    Lista todos os chamados com filtros opcionais.
+    Por padrão, exclui chamados cancelados e arquivados.
     """
     query = db.query(Chamado)
+
+    # Filtros padrão para excluir cancelados e arquivados
+    if not incluir_cancelados:
+        query = query.filter(Chamado.cancelado == False)
+    if not incluir_arquivados:
+        query = query.filter(Chamado.arquivado == False)
 
     if status:
         query = query.filter(Chamado.status == status)
@@ -128,6 +137,102 @@ def atualizar_chamado(
             status_anterior=status_anterior,
             status_novo=chamado_data.status.value
         )
+
+    return chamado
+
+
+@router.patch("/{chamado_id}/cancelar", response_model=ChamadoResponse)
+def cancelar_chamado(
+    chamado_id: int,
+    usuario_id: int,  # Em produção, isso viria do token de autenticação
+    db: Session = Depends(get_db)
+):
+    """
+    Cancela um chamado (soft delete - apenas marca como cancelado)
+    """
+    chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
+    if not chamado:
+        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+
+    if chamado.cancelado:
+        raise HTTPException(status_code=400, detail="Chamado já está cancelado")
+
+    chamado.cancelado = True
+    db.commit()
+    db.refresh(chamado)
+
+    # Registrar no histórico
+    registrar_historico(
+        db=db,
+        chamado_id=chamado.id,
+        usuario_id=usuario_id,
+        acao="Cancelamento de chamado",
+        descricao=f"Chamado #{chamado.protocolo} foi cancelado"
+    )
+
+    return chamado
+
+
+@router.patch("/{chamado_id}/arquivar", response_model=ChamadoResponse)
+def arquivar_chamado(
+    chamado_id: int,
+    usuario_id: int,  # Em produção, isso viria do token de autenticação
+    db: Session = Depends(get_db)
+):
+    """
+    Arquiva um chamado (remove da visualização padrão mas mantém no banco)
+    """
+    chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
+    if not chamado:
+        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+
+    if chamado.arquivado:
+        raise HTTPException(status_code=400, detail="Chamado já está arquivado")
+
+    chamado.arquivado = True
+    db.commit()
+    db.refresh(chamado)
+
+    # Registrar no histórico
+    registrar_historico(
+        db=db,
+        chamado_id=chamado.id,
+        usuario_id=usuario_id,
+        acao="Arquivamento de chamado",
+        descricao=f"Chamado #{chamado.protocolo} foi arquivado"
+    )
+
+    return chamado
+
+
+@router.patch("/{chamado_id}/desarquivar", response_model=ChamadoResponse)
+def desarquivar_chamado(
+    chamado_id: int,
+    usuario_id: int,  # Em produção, isso viria do token de autenticação
+    db: Session = Depends(get_db)
+):
+    """
+    Desarquiva um chamado (volta a exibir na visualização padrão)
+    """
+    chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
+    if not chamado:
+        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+
+    if not chamado.arquivado:
+        raise HTTPException(status_code=400, detail="Chamado não está arquivado")
+
+    chamado.arquivado = False
+    db.commit()
+    db.refresh(chamado)
+
+    # Registrar no histórico
+    registrar_historico(
+        db=db,
+        chamado_id=chamado.id,
+        usuario_id=usuario_id,
+        acao="Desarquivamento de chamado",
+        descricao=f"Chamado #{chamado.protocolo} foi desarquivado"
+    )
 
     return chamado
 
