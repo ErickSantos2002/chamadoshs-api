@@ -7,6 +7,7 @@ from app.api.deps import get_db
 from app.models.chamado import Chamado
 from app.schemas.chamado import ChamadoCreate, ChamadoUpdate, ChamadoResponse
 from app.services.chamado_service import gerar_protocolo, registrar_historico, calcular_tempo_resolucao
+from app.services.webhook_service import enviar_webhook_tecnico
 
 router = APIRouter()
 
@@ -89,6 +90,15 @@ def criar_chamado(chamado_data: ChamadoCreate, db: Session = Depends(get_db)):
         status_novo="Aberto"
     )
 
+    # Enviar webhook para notificação (sem técnico = "Sem atribuição")
+    enviar_webhook_tecnico(
+        db=db,
+        protocolo=protocolo,
+        titulo=chamado.titulo,
+        tecnico_id=None,
+        acao="criado"
+    )
+
     return chamado
 
 
@@ -106,8 +116,9 @@ def atualizar_chamado(
     if not chamado:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
 
-    # Armazenar status anterior para histórico
+    # Armazenar status anterior e técnico anterior para histórico e webhook
     status_anterior = chamado.status
+    tecnico_anterior = chamado.tecnico_responsavel_id
 
     # Atualizar campos
     update_data = chamado_data.model_dump(exclude_unset=True)
@@ -136,6 +147,16 @@ def atualizar_chamado(
             descricao=f"Status alterado de {status_anterior} para {chamado_data.status.value}",
             status_anterior=status_anterior,
             status_novo=chamado_data.status.value
+        )
+
+    # Enviar webhook se o técnico foi atribuído ou alterado
+    if chamado_data.tecnico_responsavel_id is not None and tecnico_anterior != chamado_data.tecnico_responsavel_id:
+        enviar_webhook_tecnico(
+            db=db,
+            protocolo=chamado.protocolo,
+            titulo=chamado.titulo,
+            tecnico_id=chamado_data.tecnico_responsavel_id,
+            acao="atribuido"
         )
 
     return chamado
