@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, TIMESTAMP, ForeignKey, Text, Che
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.core.database import Base
+from app.utils.timezone import agora_brasilia
 
 
 class Chamado(Base):
@@ -12,8 +13,8 @@ class Chamado(Base):
 
     # Quem e quando
     solicitante_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False)
-    data_abertura = Column(TIMESTAMP, server_default=func.now())
-    data_atualizacao = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    data_abertura = Column(TIMESTAMP, default=agora_brasilia)
+    data_atualizacao = Column(TIMESTAMP, default=agora_brasilia, onupdate=agora_brasilia)
     data_resolucao = Column(TIMESTAMP, nullable=True)
 
     # O que
@@ -39,8 +40,8 @@ class Chamado(Base):
     cancelado = Column(Boolean, default=False, nullable=False)
     arquivado = Column(Boolean, default=False, nullable=False)
 
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    created_at = Column(TIMESTAMP, default=agora_brasilia)
+    updated_at = Column(TIMESTAMP, default=agora_brasilia, onupdate=agora_brasilia)
 
     # Constraints
     __table_args__ = (

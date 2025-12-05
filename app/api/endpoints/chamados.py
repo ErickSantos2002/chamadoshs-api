@@ -8,6 +8,7 @@ from app.models.chamado import Chamado
 from app.schemas.chamado import ChamadoCreate, ChamadoUpdate, ChamadoResponse
 from app.services.chamado_service import gerar_protocolo, registrar_historico, calcular_tempo_resolucao
 from app.services.webhook_service import enviar_webhook_tecnico
+from app.utils.timezone import agora_brasilia
 
 router = APIRouter()
 
@@ -128,7 +129,7 @@ def atualizar_chamado(
     # Se mudou para "Resolvido" ou "Fechado", calcular tempo de resolução
     if chamado_data.status and chamado_data.status in ["Resolvido", "Fechado"]:
         if not chamado.data_resolucao:
-            chamado.data_resolucao = datetime.now()
+            chamado.data_resolucao = agora_brasilia()
             chamado.tempo_resolucao_minutos = calcular_tempo_resolucao(
                 chamado.data_abertura,
                 chamado.data_resolucao

@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, Boolean, TIMESTAMP, ForeignKey
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.core.database import Base
+from app.utils.timezone import agora_brasilia
 
 
 class Usuario(Base):
@@ -13,8 +14,8 @@ class Usuario(Base):
     setor_id = Column(Integer, ForeignKey("setores.id"))
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
     ativo = Column(Boolean, default=True)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+    created_at = Column(TIMESTAMP, default=agora_brasilia)
+    updated_at = Column(TIMESTAMP, default=agora_brasilia, onupdate=agora_brasilia)
 
     # Relationships
     setor = relationship("Setor", back_populates="usuarios")
