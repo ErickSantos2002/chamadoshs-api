@@ -2,6 +2,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from app.models.chamado import Chamado
 from app.models.historico import HistoricoChamado
+from app.utils.timezone import para_brasilia
 
 
 def gerar_protocolo(db: Session) -> str:
@@ -51,7 +52,12 @@ def registrar_historico(
 
 def calcular_tempo_resolucao(data_abertura: datetime, data_resolucao: datetime) -> int:
     """
-    Calcula o tempo de resolução em minutos
+    Calcula o tempo de resolução em minutos.
+    Garante que ambas as datas estejam com timezone antes de calcular a diferença.
     """
-    diferenca = data_resolucao - data_abertura
+    # Garante que ambas as datas tenham timezone (offset-aware)
+    data_abertura_tz = para_brasilia(data_abertura)
+    data_resolucao_tz = para_brasilia(data_resolucao)
+
+    diferenca = data_resolucao_tz - data_abertura_tz
     return int(diferenca.total_seconds() / 60)
