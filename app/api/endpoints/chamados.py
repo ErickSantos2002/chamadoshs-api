@@ -43,7 +43,9 @@ def listar_chamados(
     if tecnico_id:
         query = query.filter(Chamado.tecnico_responsavel_id == tecnico_id)
 
-    chamados = query.offset(skip).limit(limit).all()
+    # Ordem determinística: sem ela o Postgres não garante a mesma sequência
+    # entre páginas, e o skip/limit repetiria ou puliria registros.
+    chamados = query.order_by(Chamado.id.desc()).offset(skip).limit(limit).all()
     return chamados
 
 
