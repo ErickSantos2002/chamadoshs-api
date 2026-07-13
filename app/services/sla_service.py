@@ -5,9 +5,9 @@ Regras de SLA.
 - Relógio de RESOLUÇÃO: da abertura até a resolução, descontando o tempo em "Aguardando".
 - `situacao` reflete SEMPRE o relógio de resolução; o furo de resposta vai em
   `resposta_cumprida` separadamente.
-- Sem config para a prioridade ou sem `data_abertura`: o chamado não tem SLA
-  aplicável e `calcular_sla` devolve `None` (em vez de fingir "No prazo" para
-  algo que não está sendo medido).
+- Sem config para a prioridade, sem `data_abertura`, ou chamado cancelado: o
+  chamado não tem SLA aplicável e `calcular_sla` devolve `None` (em vez de
+  fingir "No prazo" para algo que não está sendo medido).
 """
 from datetime import datetime
 from typing import List, Optional
@@ -65,6 +65,26 @@ def _fim_da_resposta(historicos: List[HistoricoChamado]) -> Optional[datetime]:
     return saidas[0].created_at if saidas else None
 
 
+def _fim_da_resolucao(chamado: Chamado, historicos: List[HistoricoChamado]) -> Optional[datetime]:
+    """
+    Momento em que o relógio de resolução deve parar.
+
+    Usa a ÚLTIMA transição do histórico para "Resolvido"/"Fechado" — estável
+    sob reabertura, já que uma resolução anterior (revertida por uma reabertura
+    posterior) não é a mais recente. `data_resolucao` e `data_atualizacao` são
+    fallbacks só para chamados legados sem esse histórico: `data_atualizacao`
+    avança em qualquer escrita (onupdate), então só serve de último recurso.
+    """
+    transicoes_finais = sorted(
+        [h for h in historicos if h.status_novo in STATUS_FINAIS],
+        key=lambda h: h.created_at,
+    )
+    if transicoes_finais:
+        return transicoes_finais[-1].created_at
+
+    return chamado.data_resolucao or chamado.data_atualizacao
+
+
 def calcular_sla(
     chamado: Chamado,
     historicos: List[HistoricoChamado],
@@ -73,10 +93,14 @@ def calcular_sla(
 ) -> Optional[dict]:
     """
     Calcula o bloco de SLA de um chamado. Devolve as chaves de SLAInfo, ou
-    `None` quando não há SLA aplicável: sem config para a prioridade ou sem
-    `data_abertura`.
+    `None` quando não há SLA aplicável: sem config para a prioridade, sem
+    `data_abertura`, ou chamado cancelado (cancelamento não tem obrigação de
+    SLA e, sendo um booleano à parte do status, não entra em STATUS_FINAIS).
     """
     if config is None or chamado.data_abertura is None:
+        return None
+
+    if chamado.cancelado:
         return None
 
     if config.minutos_resolucao <= 0:
@@ -86,11 +110,10 @@ def calcular_sla(
     abertura = chamado.data_abertura
 
     # --- Relógio de resolução -------------------------------------------------
-    # Chamados Resolvido/Fechado congelam a situação no momento da resolução,
-    # mesmo que `data_resolucao` esteja ausente (dados legados/importados).
+    # Chamados Resolvido/Fechado congelam a situação no momento da resolução.
     esta_finalizado = chamado.status in STATUS_FINAIS
     fim_resolucao = (
-        (chamado.data_resolucao or chamado.data_atualizacao or agora)
+        (_fim_da_resolucao(chamado, historicos) or agora)
         if esta_finalizado
         else agora
     )
