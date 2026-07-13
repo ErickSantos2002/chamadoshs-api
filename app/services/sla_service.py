@@ -72,12 +72,21 @@ def calcular_sla(
     if config is None or chamado.data_abertura is None:
         return SLA_VAZIO.copy()
 
+    if config.minutos_resolucao <= 0:
+        return SLA_VAZIO.copy()
+
     agora = agora or agora_brasilia()
     abertura = chamado.data_abertura
 
     # --- Relógio de resolução -------------------------------------------------
-    resolvido = chamado.status in STATUS_FINAIS and chamado.data_resolucao is not None
-    fim_resolucao = chamado.data_resolucao if resolvido else agora
+    # Chamados Resolvido/Fechado congelam a situação no momento da resolução,
+    # mesmo que `data_resolucao` esteja ausente (dados legados/importados).
+    esta_finalizado = chamado.status in STATUS_FINAIS
+    fim_resolucao = (
+        (chamado.data_resolucao or chamado.data_atualizacao or agora)
+        if esta_finalizado
+        else agora
+    )
 
     minutos_pausados = sum(
         contar_minutos_uteis(inicio, fim)
@@ -104,7 +113,7 @@ def calcular_sla(
         situacao = "No prazo"
 
     # --- Relógio de resposta --------------------------------------------------
-    fim_resposta = _fim_da_resposta(historicos) or agora
+    fim_resposta = _fim_da_resposta(historicos) or fim_resolucao
     consumido_resposta = contar_minutos_uteis(abertura, fim_resposta)
     prazo_resposta = somar_minutos_uteis(abertura, config.minutos_resposta)
 
