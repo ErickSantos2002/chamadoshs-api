@@ -3,6 +3,8 @@ from typing import Optional
 from datetime import datetime
 from enum import Enum
 
+from app.schemas.sla import SLAInfo
+
 
 class PrioridadeEnum(str, Enum):
     BAIXA = "Baixa"
@@ -68,5 +70,6 @@ class ChamadoResponse(ChamadoBase):
     data_resolucao: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    sla: Optional[SLAInfo] = None
 
     model_config = ConfigDict(from_attributes=True)

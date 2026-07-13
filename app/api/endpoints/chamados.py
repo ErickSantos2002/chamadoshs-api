@@ -5,12 +5,47 @@ from datetime import datetime
 
 from app.api.deps import get_db
 from app.models.chamado import Chamado
+from app.models.historico import HistoricoChamado
+from app.models.sla_config import SLAConfig
 from app.schemas.chamado import ChamadoCreate, ChamadoUpdate, ChamadoResponse
 from app.services.chamado_service import gerar_protocolo, registrar_historico, calcular_tempo_resolucao
+from app.services.sla_service import calcular_sla
 from app.services.webhook_service import enviar_webhook_tecnico
 from app.utils.timezone import agora_brasilia
 
 router = APIRouter()
+
+
+def _anexar_sla(chamados: List[Chamado], db: Session) -> List[Chamado]:
+    """
+    Calcula e anexa o bloco `sla` a cada chamado.
+
+    Duas queries no total (configs + históricos de todos os chamados de uma vez),
+    para não cair em N+1 na listagem.
+    """
+    if not chamados:
+        return chamados
+
+    configs = {c.prioridade: c for c in db.query(SLAConfig).all()}
+
+    ids = [c.id for c in chamados]
+    historicos_por_chamado: dict[int, list] = {i: [] for i in ids}
+    historicos = (
+        db.query(HistoricoChamado)
+        .filter(HistoricoChamado.chamado_id.in_(ids))
+        .all()
+    )
+    for h in historicos:
+        historicos_por_chamado[h.chamado_id].append(h)
+
+    for chamado in chamados:
+        chamado.sla = calcular_sla(
+            chamado=chamado,
+            historicos=historicos_por_chamado.get(chamado.id, []),
+            config=configs.get(chamado.prioridade),
+        )
+
+    return chamados
 
 
 @router.get("/", response_model=List[ChamadoResponse])
@@ -46,7 +81,7 @@ def listar_chamados(
     # Ordem determinística: sem ela o Postgres não garante a mesma sequência
     # entre páginas, e o skip/limit repetiria ou puliria registros.
     chamados = query.order_by(Chamado.id.desc()).offset(skip).limit(limit).all()
-    return chamados
+    return _anexar_sla(chamados, db)
 
 
 @router.get("/{chamado_id}", response_model=ChamadoResponse)
@@ -57,7 +92,7 @@ def buscar_chamado(chamado_id: int, db: Session = Depends(get_db)):
     chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
     if not chamado:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
-    return chamado
+    return _anexar_sla([chamado], db)[0]
 
 
 @router.post("/", response_model=ChamadoResponse, status_code=status.HTTP_201_CREATED)
