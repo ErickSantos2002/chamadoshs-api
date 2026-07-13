@@ -4,6 +4,7 @@ from typing import List
 
 from app.api.deps import get_db
 from app.models.categoria import Categoria
+from app.models.chamado import Chamado
 from app.schemas.categoria import CategoriaCreate, CategoriaUpdate, CategoriaResponse
 
 router = APIRouter()
@@ -75,12 +76,22 @@ def atualizar_categoria(
 @router.delete("/{categoria_id}", status_code=status.HTTP_204_NO_CONTENT)
 def deletar_categoria(categoria_id: int, db: Session = Depends(get_db)):
     """
-    Desativa uma categoria
+    Exclui uma categoria.
+
+    Só apaga se nenhum chamado estiver vinculado a ela — caso contrário devolve 400,
+    porque apagar quebraria o histórico dos chamados (FK chamados.categoria_id).
     """
     categoria = db.query(Categoria).filter(Categoria.id == categoria_id).first()
     if not categoria:
         raise HTTPException(status_code=404, detail="Categoria não encontrada")
 
-    categoria.ativo = False
+    vinculados = db.query(Chamado).filter(Chamado.categoria_id == categoria_id).count()
+    if vinculados > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Não é possível excluir categoria com {vinculados} chamado(s) vinculado(s)",
+        )
+
+    db.delete(categoria)
     db.commit()
     return None
