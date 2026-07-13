@@ -137,7 +137,7 @@ def criar_chamado(chamado_data: ChamadoCreate, db: Session = Depends(get_db)):
         acao="criado"
     )
 
-    return chamado
+    return _anexar_sla([chamado], db)[0]
 
 
 @router.put("/{chamado_id}", response_model=ChamadoResponse)
@@ -197,7 +197,7 @@ def atualizar_chamado(
             acao="atribuido"
         )
 
-    return chamado
+    return _anexar_sla([chamado], db)[0]
 
 
 @router.patch("/{chamado_id}/cancelar", response_model=ChamadoResponse)
@@ -229,7 +229,7 @@ def cancelar_chamado(
         descricao=f"Chamado #{chamado.protocolo} foi cancelado"
     )
 
-    return chamado
+    return _anexar_sla([chamado], db)[0]
 
 
 @router.patch("/{chamado_id}/arquivar", response_model=ChamadoResponse)
@@ -261,7 +261,7 @@ def arquivar_chamado(
         descricao=f"Chamado #{chamado.protocolo} foi arquivado"
     )
 
-    return chamado
+    return _anexar_sla([chamado], db)[0]
 
 
 @router.patch("/{chamado_id}/desarquivar", response_model=ChamadoResponse)
@@ -293,7 +293,7 @@ def desarquivar_chamado(
         descricao=f"Chamado #{chamado.protocolo} foi desarquivado"
     )
 
-    return chamado
+    return _anexar_sla([chamado], db)[0]
 
 
 @router.delete("/{chamado_id}", status_code=status.HTTP_204_NO_CONTENT)
