@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from typing import List
 from datetime import datetime
@@ -22,11 +23,21 @@ def _anexar_sla(chamados: List[Chamado], db: Session) -> List[Chamado]:
 
     Duas queries no total (configs + históricos de todos os chamados de uma vez),
     para não cair em N+1 na listagem.
+
+    Resiliente à ausência da tabela `sla_configs` (ex.: migração ainda não
+    rodou em produção): se a query falhar, trata como "sem configs" em vez de
+    derrubar o endpoint inteiro — o chamado é devolvido normalmente, só sem
+    bloco de SLA (ver `calcular_sla`: sem config, o chamado não tem SLA e o
+    campo vai `None`, nunca um falso "No prazo").
     """
     if not chamados:
         return chamados
 
-    configs = {c.prioridade: c for c in db.query(SLAConfig).all()}
+    try:
+        configs = {c.prioridade: c for c in db.query(SLAConfig).all()}
+    except SQLAlchemyError:
+        db.rollback()  # sem isso, a próxima query nesta sessão estoura PendingRollbackError
+        configs = {}
 
     ids = [c.id for c in chamados]
     historicos_por_chamado: dict[int, list] = {i: [] for i in ids}
@@ -39,10 +50,15 @@ def _anexar_sla(chamados: List[Chamado], db: Session) -> List[Chamado]:
         historicos_por_chamado[h.chamado_id].append(h)
 
     for chamado in chamados:
-        chamado.sla = calcular_sla(
-            chamado=chamado,
-            historicos=historicos_por_chamado.get(chamado.id, []),
-            config=configs.get(chamado.prioridade),
+        cfg = configs.get(chamado.prioridade)
+        chamado.sla = (
+            calcular_sla(
+                chamado=chamado,
+                historicos=historicos_por_chamado.get(chamado.id, []),
+                config=cfg,
+            )
+            if cfg
+            else None
         )
 
     return chamados

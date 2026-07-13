@@ -5,6 +5,9 @@ Regras de SLA.
 - Relógio de RESOLUÇÃO: da abertura até a resolução, descontando o tempo em "Aguardando".
 - `situacao` reflete SEMPRE o relógio de resolução; o furo de resposta vai em
   `resposta_cumprida` separadamente.
+- Sem config para a prioridade ou sem `data_abertura`: o chamado não tem SLA
+  aplicável e `calcular_sla` devolve `None` (em vez de fingir "No prazo" para
+  algo que não está sendo medido).
 """
 from datetime import datetime
 from typing import List, Optional
@@ -67,13 +70,17 @@ def calcular_sla(
     historicos: List[HistoricoChamado],
     config: Optional[SLAConfig],
     agora: Optional[datetime] = None,
-) -> dict:
-    """Calcula o bloco de SLA de um chamado. Devolve as chaves de SLAInfo."""
+) -> Optional[dict]:
+    """
+    Calcula o bloco de SLA de um chamado. Devolve as chaves de SLAInfo, ou
+    `None` quando não há SLA aplicável: sem config para a prioridade ou sem
+    `data_abertura`.
+    """
     if config is None or chamado.data_abertura is None:
-        return SLA_VAZIO.copy()
+        return None
 
     if config.minutos_resolucao <= 0:
-        return SLA_VAZIO.copy()
+        return None
 
     agora = agora or agora_brasilia()
     abertura = chamado.data_abertura
@@ -127,15 +134,3 @@ def calcular_sla(
         "situacao": situacao,
         "resposta_cumprida": consumido_resposta <= config.minutos_resposta,
     }
-
-
-SLA_VAZIO = {
-    "prazo_resposta": None,
-    "prazo_resolucao": None,
-    "minutos_resposta_consumidos": 0,
-    "minutos_resolucao_consumidos": 0,
-    "minutos_pausados": 0,
-    "percentual_resolucao": 0,
-    "situacao": "No prazo",
-    "resposta_cumprida": True,
-}
