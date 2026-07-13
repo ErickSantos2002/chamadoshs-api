@@ -1,5 +1,31 @@
 # Guia de Deploy - Easypanel
 
+## ⚠️ Ordem obrigatória de deploy (feature de SLA)
+
+A partir da feature de SLA, o deploy **precisa** seguir esta ordem, sempre que
+houver migração pendente em `migrations/`:
+
+1. **Rodar a migração no console do Postgres** — hoje, `migrations/add_sla_configs.sql`
+   (cria a tabela `sla_configs` e popula os prazos por prioridade).
+2. **Deploy da API.**
+3. **Deploy do frontend.**
+
+A pasta `migrations/` (ex.: `migrations/add_sla_configs.sql`, `migrations/add_auth_fields.sql`)
+guarda os incrementos de schema que rodam **manualmente** no console SQL do
+Postgres — não existe `Base.metadata.create_all` nem migração automática neste
+projeto. Isso não é opcional nem cosmético: **se a API nova subir antes da
+migração**, todo endpoint de chamados (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`
+em `/api/v1/chamados/*`) tenta consultar `sla_configs` para montar o bloco de
+SLA da resposta; sem a tabela, a query falha e **o CRUD inteiro de chamados
+cai** — não é só a feature de SLA que fica indisponível, é o sistema todo.
+
+Rodar a migração *antes* do deploy é seguro mesmo que o deploy da API falhe ou
+seja adiado: a tabela `sla_configs` órfã (sem a API nova para lê-la) não afeta
+nada do comportamento atual. Pelo mesmo motivo, um **rollback da API depois da
+migração** também é seguro — a API antiga simplesmente ignora a tabela nova, e
+a API nova (resiliente à tabela ausente) não quebra se a migração for
+revertida depois.
+
 ## Pré-requisitos
 
 1. Conta no Easypanel configurada
@@ -32,6 +58,12 @@
 6. Execute o schema do banco:
    - Copie o conteúdo do arquivo `schema_chamados.sql`
    - Cole no console SQL e execute
+
+7. Execute as migrações pendentes da pasta `migrations/` (na ordem em que foram
+   adicionadas — hoje: `add_auth_fields.sql`, `add_sla_configs.sql`):
+   - Copie o conteúdo de cada arquivo `migrations/*.sql`
+   - Cole no console SQL e execute, **antes** de subir a nova versão da API
+     (ver "Ordem obrigatória de deploy" no topo deste documento)
 
 ### 3. Adicionar Aplicação FastAPI
 
