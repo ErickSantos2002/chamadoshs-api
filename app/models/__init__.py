@@ -6,6 +6,7 @@ from app.models.chamado import Chamado
 from app.models.comentario import ComentarioChamado
 from app.models.historico import HistoricoChamado
 from app.models.anexo import Anexo
+from app.models.sla_config import SLAConfig
 
 __all__ = [
     "Setor",
@@ -15,5 +16,6 @@ __all__ = [
     "Chamado",
     "ComentarioChamado",
     "HistoricoChamado",
-    "Anexo"
+    "Anexo",
+    "SLAConfig"
 ]
