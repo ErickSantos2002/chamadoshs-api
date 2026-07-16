@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.api.endpoints import auth, chamados, usuarios, comentarios, setores, categorias, historico, diagnostico, sla_configs
+from app.api.endpoints import auth, chamados, usuarios, comentarios, setores, categorias, historico, diagnostico, sla_configs, tarefas_recorrentes
 
 # Criar aplicação FastAPI
 app = FastAPI(
@@ -94,6 +94,12 @@ app.include_router(
     sla_configs.router,
     prefix="/api/v1/sla-configs",
     tags=["SLA"]
+)
+
+app.include_router(
+    tarefas_recorrentes.router,
+    prefix="/api/v1/tarefas-recorrentes",
+    tags=["Tarefas Recorrentes"]
 )
 
 
