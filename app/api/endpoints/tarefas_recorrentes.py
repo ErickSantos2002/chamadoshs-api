@@ -116,19 +116,15 @@ def atualizar_tarefa(
 
 @router.delete("/{tarefa_id}", status_code=status.HTTP_204_NO_CONTENT)
 def deletar_tarefa(tarefa_id: int, db: Session = Depends(get_db)):
+    """Exclui a tarefa e, em cascata, todo o histórico de execuções.
+
+    A confirmação (avisando sobre a perda do histórico) é responsabilidade do
+    frontend. Aqui a exclusão é definitiva: execuções são removidas junto pelo
+    cascade do ORM e pelo ON DELETE CASCADE da FK no banco.
+    """
     tarefa = db.query(TarefaRecorrente).filter(TarefaRecorrente.id == tarefa_id).first()
     if not tarefa:
         raise HTTPException(status_code=404, detail="Tarefa recorrente não encontrada")
-    tem_execucoes = (
-        db.query(TarefaRecorrenteExecucao.id)
-        .filter(TarefaRecorrenteExecucao.tarefa_id == tarefa_id)
-        .first()
-    )
-    if tem_execucoes:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Tarefa já possui execuções registradas. Desative-a em vez de excluir.",
-        )
     db.delete(tarefa)
     db.commit()
 
