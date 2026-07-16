@@ -7,6 +7,7 @@ from app.models.comentario import ComentarioChamado
 from app.models.historico import HistoricoChamado
 from app.models.anexo import Anexo
 from app.models.sla_config import SLAConfig
+from app.models.tarefa_recorrente import TarefaRecorrente, TarefaRecorrenteExecucao
 
 __all__ = [
     "Setor",
@@ -17,5 +18,7 @@ __all__ = [
     "ComentarioChamado",
     "HistoricoChamado",
     "Anexo",
-    "SLAConfig"
+    "SLAConfig",
+    "TarefaRecorrente",
+    "TarefaRecorrenteExecucao"
 ]
