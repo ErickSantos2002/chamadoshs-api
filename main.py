@@ -103,14 +103,18 @@ app.include_router(
 )
 
 # Diagnóstico: ferramenta de debug que enumera usuários e diz quais estão sem
-# senha. Restrito a administrador e não registrado fora de desenvolvimento.
-if settings.is_development:
-    app.include_router(
-        diagnostico.router,
-        prefix="/api/v1/diagnostico",
-        tags=["Diagnóstico"],
-        dependencies=[Depends(require_admin)],
-    )
+# senha. Registrado em todos os ambientes, porque serve justamente para
+# investigar problema de deploy em produção, mas restrito a administrador.
+#
+# Atenção ao caso de bootstrap: num banco onde ninguém tem senha, não há como
+# autenticar e portanto não há como consultar este endpoint. Nessa situação a
+# verificação é por SQL direto no banco (ver criar_usuario_inicial.sql).
+app.include_router(
+    diagnostico.router,
+    prefix="/api/v1/diagnostico",
+    tags=["Diagnóstico"],
+    dependencies=[Depends(require_admin)],
+)
 
 app.include_router(
     sla_configs.router,

@@ -261,6 +261,13 @@ parar de aparecer nos logs.
 `development`. O padrão de `ENVIRONMENT` é `production`, para que esquecer a
 variável no deploy não deixe a documentação exposta.
 
+O `/api/v1/diagnostico` continua registrado em todos os ambientes, porque
+serve justamente para investigar problema de deploy, mas exige administrador.
+Ressalva de bootstrap: num banco onde ninguém tem senha não há como
+autenticar, e portanto não há como consultá-lo — nesse caso a verificação é
+por SQL direto no banco.
+
+
 ## Configuração do Token JWT
 
 As configurações do JWT estão no arquivo `.env`:
