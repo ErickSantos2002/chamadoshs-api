@@ -20,7 +20,14 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = "http://localhost:5173"
 
     # Environment
-    ENVIRONMENT: str = "development"
+    # Padrão "production" de propósito: se a variável não for definida no
+    # EasyPanel, o comportamento seguro é o que vale. O .env.example já traz
+    # ENVIRONMENT=development para o ambiente local.
+    ENVIRONMENT: str = "production"
+
+    @property
+    def is_development(self) -> bool:
+        return self.ENVIRONMENT.strip().casefold() == "development"
 
     @property
     def allowed_origins_list(self) -> List[str]:

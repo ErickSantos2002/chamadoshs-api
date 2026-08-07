@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from datetime import timedelta
 
-from app.api.deps import get_db, get_current_user
+from app.api.deps import get_db, get_current_user, require_admin
 from app.models.usuario import Usuario
 from app.models.role import Role
 from app.schemas.auth import (
@@ -69,9 +69,19 @@ def login(credentials: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/registro", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def registrar_usuario(usuario_data: UsuarioCreate, db: Session = Depends(get_db)):
+def registrar_usuario(
+    usuario_data: UsuarioCreate,
+    _admin: Usuario = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     """
-    Endpoint de registro - cria novo usuário e retorna token
+    Cria novo usuário e retorna token. Restrito a administrador.
+
+    O corpo aceita role_id, então enquanto este endpoint era público bastava
+    uma requisição sem credencial nenhuma para criar uma conta Administrador.
+
+    Duplica POST /api/v1/usuarios/, mantido por compatibilidade. Para criar o
+    primeiro usuário num banco vazio, use criar_usuario_inicial.sql.
     """
     # Verificar se o nome de usuário já existe
     usuario_existe = db.query(Usuario).filter(Usuario.nome == usuario_data.nome).first()
