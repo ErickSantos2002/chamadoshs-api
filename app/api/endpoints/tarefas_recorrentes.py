@@ -4,7 +4,9 @@ from sqlalchemy import func
 from typing import List, Optional
 from datetime import timedelta
 
-from app.api.deps import get_db, require_staff
+import logging
+
+from app.api.deps import get_current_user, get_db, require_staff
 from app.models.tarefa_recorrente import TarefaRecorrente, TarefaRecorrenteExecucao
 from app.models.usuario import Usuario
 from app.schemas.tarefa_recorrente import (
@@ -18,6 +20,8 @@ from app.services.recorrencia_service import calcular_proxima_data
 from app.utils.timezone import agora_brasilia
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 
 def _hoje():
@@ -159,16 +163,31 @@ def listar_execucoes(tarefa_id: int, db: Session = Depends(get_db)):
 
 @router.post("/{tarefa_id}/realizar", response_model=TarefaRecorrenteResponse)
 def realizar_tarefa(
-    tarefa_id: int, dados: RealizarTarefaRequest, db: Session = Depends(get_db)
+    tarefa_id: int,
+    dados: RealizarTarefaRequest,
+    current_user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """Registra uma execução e avança a próxima data para a próxima ocorrência."""
+    """
+    Registra uma execução e avança a próxima data para a próxima ocorrência.
+
+    Quem realizou vem do token: aceitar do corpo permitia registrar a
+    execução em nome de outra pessoa.
+    """
+    if dados.usuario_id is not None and dados.usuario_id != current_user.id:
+        logger.warning(
+            "campo usuario_id depreciado em realizar_tarefa: recebido %s, usando %s (do token)",
+            dados.usuario_id,
+            current_user.id,
+        )
+
     tarefa = db.query(TarefaRecorrente).filter(TarefaRecorrente.id == tarefa_id).first()
     if not tarefa:
         raise HTTPException(status_code=404, detail="Tarefa recorrente não encontrada")
 
     execucao = TarefaRecorrenteExecucao(
         tarefa_id=tarefa.id,
-        usuario_id=dados.usuario_id,
+        usuario_id=current_user.id,
         data_prevista=tarefa.proxima_data,
         observacao=dados.observacao,
     )

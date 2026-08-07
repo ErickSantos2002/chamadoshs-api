@@ -70,5 +70,7 @@ class TarefaRecorrenteResponse(TarefaRecorrenteBase):
 
 
 class RealizarTarefaRequest(BaseModel):
-    usuario_id: int
+    # DEPRECADO: ignorado, quem realizou vem do token JWT. Continua aceito só
+    # para o frontend atual não quebrar entre os dois deploys. Remover depois.
+    usuario_id: Optional[int] = None
     observacao: Optional[str] = None
