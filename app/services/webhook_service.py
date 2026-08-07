@@ -1,10 +1,12 @@
+import logging
+
 import requests
 from typing import Optional
 from sqlalchemy.orm import Session
+from app.core.config import settings
 from app.models.usuario import Usuario
 
-
-WEBHOOK_URL = "https://n8n.healthsafetytech.com/webhook/b7c8e523-a185-4308-9d43-58d30a1b4251"
+logger = logging.getLogger(__name__)
 
 
 def enviar_webhook_tecnico(
@@ -17,6 +19,10 @@ def enviar_webhook_tecnico(
     """
     Envia webhook para n8n com informações do técnico atribuído
 
+    A URL vem de WEBHOOK_TECNICO_URL. Se estiver vazia, o envio é ignorado —
+    é o padrão, para que desenvolvimento e testes não disparem notificação no
+    fluxo de produção por descuido.
+
     Args:
         db: Sessão do banco de dados
         protocolo: Protocolo do chamado
@@ -24,6 +30,13 @@ def enviar_webhook_tecnico(
         tecnico_id: ID do técnico responsável (None = Sem atribuição)
         acao: Tipo de ação ("criado" ou "atribuido")
     """
+    if not settings.WEBHOOK_TECNICO_URL:
+        logger.debug(
+            "WEBHOOK_TECNICO_URL não configurada; envio ignorado para o chamado %s",
+            protocolo,
+        )
+        return
+
     try:
         # Buscar nome do técnico
         nome_tecnico = "Sem atribuição"
@@ -42,19 +55,24 @@ def enviar_webhook_tecnico(
 
         # Enviar webhook
         response = requests.post(
-            WEBHOOK_URL,
+            settings.WEBHOOK_TECNICO_URL,
             json=payload,
-            timeout=5  # Timeout de 5 segundos
+            timeout=settings.WEBHOOK_TIMEOUT_SEGUNDOS,
         )
 
-        # Log do resultado (opcional)
+        # Log do resultado. A URL nunca é registrada: ela contém o
+        # identificador do fluxo no n8n e vale como credencial.
         if response.status_code == 200:
-            print(f"✅ Webhook enviado com sucesso para chamado {protocolo}")
+            logger.info("Webhook enviado com sucesso para o chamado %s", protocolo)
         else:
-            print(f"⚠️ Webhook retornou status {response.status_code} para chamado {protocolo}")
+            logger.warning(
+                "Webhook retornou status %s para o chamado %s",
+                response.status_code,
+                protocolo,
+            )
 
     except requests.exceptions.Timeout:
-        print(f"⚠️ Timeout ao enviar webhook para chamado {protocolo}")
+        logger.warning("Timeout ao enviar webhook para o chamado %s", protocolo)
     except Exception as e:
         # Não quebrar a aplicação se o webhook falhar
-        print(f"❌ Erro ao enviar webhook para chamado {protocolo}: {str(e)}")
+        logger.error("Erro ao enviar webhook para o chamado %s: %s", protocolo, e)

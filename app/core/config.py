@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     # vontade. Com 0, o header é ignorado e vale o IP da conexão.
     PROXY_HOPS_CONFIAVEIS: int = 1
 
+    # Webhook de notificação de técnico (n8n).
+    # Vazio desliga o envio: é o padrão para que desenvolvimento e testes não
+    # disparem notificação no fluxo de produção por descuido.
+    WEBHOOK_TECNICO_URL: str = ""
+    WEBHOOK_TIMEOUT_SEGUNDOS: int = 5
+
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:5173"
 
