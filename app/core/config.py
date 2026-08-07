@@ -14,7 +14,11 @@ class Settings(BaseSettings):
     # Security
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # 8 horas: cobre um turno de trabalho. Era 30 minutos, o que passava
+    # despercebido enquanto quase nenhuma rota validava o token — a partir do
+    # momento em que toda a API exige token, 30 minutos desconectaria o
+    # usuário no meio do expediente.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
 
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:5173"
