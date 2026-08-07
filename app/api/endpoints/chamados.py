@@ -4,8 +4,9 @@ from sqlalchemy.orm import Session
 from typing import List
 from datetime import datetime
 
-from app.api.deps import get_db
+from app.api.deps import get_db, require_admin
 from app.models.chamado import Chamado
+from app.models.usuario import Usuario
 from app.models.historico import HistoricoChamado
 from app.models.sla_config import SLAConfig
 from app.schemas.chamado import ChamadoCreate, ChamadoUpdate, ChamadoResponse
@@ -313,9 +314,16 @@ def desarquivar_chamado(
 
 
 @router.delete("/{chamado_id}", status_code=status.HTTP_204_NO_CONTENT)
-def deletar_chamado(chamado_id: int, db: Session = Depends(get_db)):
+def deletar_chamado(
+    chamado_id: int,
+    _admin: Usuario = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     """
-    Deleta um chamado (soft delete recomendado em produção)
+    Deleta um chamado em definitivo. Restrito a administrador.
+
+    É exclusão real (db.delete), não soft delete — o registro some junto
+    com seu histórico. Para tirar da visualização use cancelar ou arquivar.
     """
     chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
     if not chamado:

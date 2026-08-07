@@ -2,9 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.api.deps import get_db
+from app.api.deps import get_db, require_admin
 from app.models.categoria import Categoria
 from app.models.chamado import Chamado
+from app.models.usuario import Usuario
 from app.schemas.categoria import CategoriaCreate, CategoriaUpdate, CategoriaResponse
 
 router = APIRouter()
@@ -40,9 +41,13 @@ def buscar_categoria(categoria_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=CategoriaResponse, status_code=status.HTTP_201_CREATED)
-def criar_categoria(categoria_data: CategoriaCreate, db: Session = Depends(get_db)):
+def criar_categoria(
+    categoria_data: CategoriaCreate,
+    _admin: Usuario = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     """
-    Cria uma nova categoria
+    Cria uma nova categoria. Restrito a administrador.
     """
     categoria = Categoria(**categoria_data.model_dump())
     db.add(categoria)
@@ -55,10 +60,11 @@ def criar_categoria(categoria_data: CategoriaCreate, db: Session = Depends(get_d
 def atualizar_categoria(
     categoria_id: int,
     categoria_data: CategoriaUpdate,
-    db: Session = Depends(get_db)
+    _admin: Usuario = Depends(require_admin),
+    db: Session = Depends(get_db),
 ):
     """
-    Atualiza uma categoria existente
+    Atualiza uma categoria existente. Restrito a administrador.
     """
     categoria = db.query(Categoria).filter(Categoria.id == categoria_id).first()
     if not categoria:
@@ -74,9 +80,13 @@ def atualizar_categoria(
 
 
 @router.delete("/{categoria_id}", status_code=status.HTTP_204_NO_CONTENT)
-def deletar_categoria(categoria_id: int, db: Session = Depends(get_db)):
+def deletar_categoria(
+    categoria_id: int,
+    _admin: Usuario = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     """
-    Exclui uma categoria.
+    Exclui uma categoria. Restrito a administrador.
 
     Só apaga se nenhum chamado estiver vinculado a ela — caso contrário devolve 400,
     porque apagar quebraria o histórico dos chamados (FK chamados.categoria_id).

@@ -4,7 +4,7 @@ from sqlalchemy import func
 from typing import List, Optional
 from datetime import timedelta
 
-from app.api.deps import get_db
+from app.api.deps import get_db, require_staff
 from app.models.tarefa_recorrente import TarefaRecorrente, TarefaRecorrenteExecucao
 from app.models.usuario import Usuario
 from app.schemas.tarefa_recorrente import (
@@ -81,7 +81,11 @@ def buscar_tarefa(tarefa_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=TarefaRecorrenteResponse, status_code=status.HTTP_201_CREATED)
-def criar_tarefa(dados: TarefaRecorrenteCreate, db: Session = Depends(get_db)):
+def criar_tarefa(
+    dados: TarefaRecorrenteCreate,
+    _staff: Usuario = Depends(require_staff),
+    db: Session = Depends(get_db),
+):
     payload = dados.model_dump()
     proxima = payload.pop("proxima_data", None)
     if proxima is None:
@@ -102,7 +106,10 @@ def criar_tarefa(dados: TarefaRecorrenteCreate, db: Session = Depends(get_db)):
 
 @router.put("/{tarefa_id}", response_model=TarefaRecorrenteResponse)
 def atualizar_tarefa(
-    tarefa_id: int, dados: TarefaRecorrenteUpdate, db: Session = Depends(get_db)
+    tarefa_id: int,
+    dados: TarefaRecorrenteUpdate,
+    _staff: Usuario = Depends(require_staff),
+    db: Session = Depends(get_db),
 ):
     tarefa = db.query(TarefaRecorrente).filter(TarefaRecorrente.id == tarefa_id).first()
     if not tarefa:
@@ -115,7 +122,11 @@ def atualizar_tarefa(
 
 
 @router.delete("/{tarefa_id}", status_code=status.HTTP_204_NO_CONTENT)
-def deletar_tarefa(tarefa_id: int, db: Session = Depends(get_db)):
+def deletar_tarefa(
+    tarefa_id: int,
+    _staff: Usuario = Depends(require_staff),
+    db: Session = Depends(get_db),
+):
     """Exclui a tarefa e, em cascata, todo o histórico de execuções.
 
     A confirmação (avisando sobre a perda do histórico) é responsabilidade do
