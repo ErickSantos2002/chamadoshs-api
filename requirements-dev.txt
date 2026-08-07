@@ -1,0 +1,15 @@
+# Dependências de desenvolvimento e teste.
+#
+# Separado do requirements.txt de propósito: o Dockerfile instala apenas o de
+# produção, então nada daqui vai para a imagem publicada.
+#
+# Uso:  pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+pytest==8.3.4
+
+# httpx é exigido pelo starlette.testclient. A versão importa: da 0.28 em
+# diante o parâmetro `app=` foi removido do Client, e o TestClient do
+# Starlette 0.36 (que vem com FastAPI 0.110) deixa de funcionar.
+httpx==0.27.2
