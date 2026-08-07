@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.api.deps import get_db
+from app.api.deps import get_db, require_admin, ROLE_ADMIN, _normalizar_role
 from app.models.usuario import Usuario
 from app.schemas.usuario import UsuarioCreate, UsuarioUpdate, UsuarioResponse
 from app.core.security import gerar_hash_senha
@@ -47,9 +47,13 @@ def buscar_usuario(usuario_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=UsuarioResponse, status_code=status.HTTP_201_CREATED)
-def criar_usuario(usuario_data: UsuarioCreate, db: Session = Depends(get_db)):
+def criar_usuario(
+    usuario_data: UsuarioCreate,
+    _admin: Usuario = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     """
-    Cria um novo usuário
+    Cria um novo usuário. Restrito a administrador.
     """
     # Verifica se já existe usuário com esse nome
     usuario_existente = db.query(Usuario).filter(Usuario.nome == usuario_data.nome).first()
@@ -77,10 +81,19 @@ def criar_usuario(usuario_data: UsuarioCreate, db: Session = Depends(get_db)):
 def atualizar_usuario(
     usuario_id: int,
     usuario_data: UsuarioUpdate,
-    db: Session = Depends(get_db)
+    _admin: Usuario = Depends(require_admin),
+    db: Session = Depends(get_db),
 ):
     """
-    Atualiza um usuário existente
+    Atualiza um usuário existente. Restrito a administrador.
+
+    Aceita senha e role_id. Enquanto este endpoint era público, uma única
+    requisição sem token trocava a senha de qualquer conta, inclusive a do
+    administrador — era o caminho mais direto de tomada do sistema.
+
+    Não precisa de exceção para o próprio usuário: quem quer trocar a
+    própria senha usa POST /api/v1/auth/alterar-senha, que exige a senha
+    atual.
     """
     usuario = db.query(Usuario).filter(Usuario.id == usuario_id).first()
     if not usuario:
@@ -102,13 +115,41 @@ def atualizar_usuario(
 
 
 @router.delete("/{usuario_id}", status_code=status.HTTP_204_NO_CONTENT)
-def deletar_usuario(usuario_id: int, db: Session = Depends(get_db)):
+def deletar_usuario(
+    usuario_id: int,
+    admin: Usuario = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     """
-    Desativa um usuário (soft delete)
+    Desativa um usuário (soft delete). Restrito a administrador.
+
+    Bloqueia dois casos que deixariam o sistema sem quem administrar:
+    desativar a si mesmo e desativar o último administrador ativo. Como
+    criar e editar usuário também exigem administrador, não haveria
+    recuperação pela aplicação — só por SQL direto no banco.
     """
     usuario = db.query(Usuario).filter(Usuario.id == usuario_id).first()
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
+
+    if usuario.id == admin.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível desativar o próprio usuário",
+        )
+
+    if usuario.ativo and _normalizar_role(usuario.role.nome if usuario.role else None) == _normalizar_role(ROLE_ADMIN):
+        admins_ativos = (
+            db.query(Usuario)
+            .join(Usuario.role)
+            .filter(Usuario.ativo.is_(True), Usuario.role_id == usuario.role_id)
+            .count()
+        )
+        if admins_ativos <= 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Não é possível desativar o último administrador ativo",
+            )
 
     usuario.ativo = False
     db.commit()

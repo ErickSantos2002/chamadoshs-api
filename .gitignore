@@ -6,6 +6,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 ENV/
 build/
 develop-eggs/
@@ -30,6 +31,10 @@ wheels/
 # IDE
 .vscode/
 .idea/
+
+# Claude Code: as skills em .claude/skills/ SÃO versionadas (tooling do
+# projeto). Só o que é por máquina fica de fora.
+.claude/settings.local.json
 *.swp
 *.swo
 *~

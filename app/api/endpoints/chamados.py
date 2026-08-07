@@ -1,11 +1,21 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 
-from app.api.deps import get_db
+from app.api.deps import (
+    get_current_user,
+    get_db,
+    is_admin,
+    is_staff,
+    require_admin,
+    require_staff,
+)
 from app.models.chamado import Chamado
+from app.models.usuario import Usuario
 from app.models.historico import HistoricoChamado
 from app.models.sla_config import SLAConfig
 from app.schemas.chamado import ChamadoCreate, ChamadoUpdate, ChamadoResponse
@@ -15,6 +25,32 @@ from app.services.webhook_service import enviar_webhook_tecnico
 from app.utils.timezone import agora_brasilia
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
+
+# Parâmetro `usuario_id` depreciado.
+#
+# Estes endpoints recebiam o autor da ação como query parameter, ou seja, o
+# histórico registrava quem o chamador dissesse ser. O autor agora vem do
+# token. O parâmetro continua sendo aceito e ignorado apenas para o frontend
+# atual não quebrar durante a janela entre os dois deploys (repositórios
+# separados). Remover assim que o aviso abaixo parar de aparecer nos logs.
+USUARIO_ID_DEPRECIADO = Query(
+    None,
+    deprecated=True,
+    include_in_schema=False,
+    description="DEPRECADO: ignorado. O autor da ação vem do token JWT.",
+)
+
+
+def _avisar_usuario_id_depreciado(endpoint: str, usuario_id: Optional[int], atual: Usuario) -> None:
+    if usuario_id is not None and usuario_id != atual.id:
+        logger.warning(
+            "param usuario_id depreciado em %s: recebido %s, usando %s (do token)",
+            endpoint,
+            usuario_id,
+            atual.id,
+        )
 
 
 def _anexar_sla(chamados: List[Chamado], db: Session) -> List[Chamado]:
@@ -112,17 +148,30 @@ def buscar_chamado(chamado_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=ChamadoResponse, status_code=status.HTTP_201_CREATED)
-def criar_chamado(chamado_data: ChamadoCreate, db: Session = Depends(get_db)):
+def criar_chamado(
+    chamado_data: ChamadoCreate,
+    current_user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
-    Cria um novo chamado
+    Cria um novo chamado.
+
+    O solicitante vem do token, não do corpo: aceitar do cliente permitia
+    abrir chamado em nome de qualquer pessoa. Administrador continua podendo
+    abrir em nome de outro, informando solicitante_id.
     """
+    if is_admin(current_user) and chamado_data.solicitante_id:
+        solicitante_id = chamado_data.solicitante_id
+    else:
+        solicitante_id = current_user.id
+
     # Gerar protocolo único
     protocolo = gerar_protocolo(db)
 
     # Criar chamado
     chamado = Chamado(
         protocolo=protocolo,
-        solicitante_id=chamado_data.solicitante_id,
+        solicitante_id=solicitante_id,
         categoria_id=chamado_data.categoria_id,
         titulo=chamado_data.titulo,
         descricao=chamado_data.descricao,
@@ -138,7 +187,7 @@ def criar_chamado(chamado_data: ChamadoCreate, db: Session = Depends(get_db)):
     registrar_historico(
         db=db,
         chamado_id=chamado.id,
-        usuario_id=chamado_data.solicitante_id,
+        usuario_id=solicitante_id,
         acao="Abertura de chamado",
         descricao=f"Chamado aberto com protocolo {protocolo}",
         status_novo="Aberto"
@@ -160,12 +209,15 @@ def criar_chamado(chamado_data: ChamadoCreate, db: Session = Depends(get_db)):
 def atualizar_chamado(
     chamado_id: int,
     chamado_data: ChamadoUpdate,
-    usuario_id: int,  # Em produção, isso viria do token de autenticação
-    db: Session = Depends(get_db)
+    usuario_id: Optional[int] = USUARIO_ID_DEPRECIADO,
+    current_user: Usuario = Depends(require_staff),
+    db: Session = Depends(get_db),
 ):
     """
-    Atualiza um chamado existente
+    Atualiza um chamado existente. Restrito a administrador ou técnico.
     """
+    _avisar_usuario_id_depreciado("atualizar_chamado", usuario_id, current_user)
+
     chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
     if not chamado:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
@@ -196,7 +248,7 @@ def atualizar_chamado(
         registrar_historico(
             db=db,
             chamado_id=chamado.id,
-            usuario_id=usuario_id,
+            usuario_id=current_user.id,
             acao="Alteração de status",
             descricao=f"Status alterado de {status_anterior} para {chamado_data.status.value}",
             status_anterior=status_anterior,
@@ -219,15 +271,27 @@ def atualizar_chamado(
 @router.patch("/{chamado_id}/cancelar", response_model=ChamadoResponse)
 def cancelar_chamado(
     chamado_id: int,
-    usuario_id: int,  # Em produção, isso viria do token de autenticação
-    db: Session = Depends(get_db)
+    usuario_id: Optional[int] = USUARIO_ID_DEPRECIADO,
+    current_user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
-    Cancela um chamado (soft delete - apenas marca como cancelado)
+    Cancela um chamado (soft delete - apenas marca como cancelado).
+
+    O solicitante pode cancelar o próprio chamado; administrador e técnico
+    cancelam qualquer um.
     """
+    _avisar_usuario_id_depreciado("cancelar_chamado", usuario_id, current_user)
+
     chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
     if not chamado:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
+
+    if not is_staff(current_user) and chamado.solicitante_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Só é possível cancelar chamados abertos por você",
+        )
 
     if chamado.cancelado:
         raise HTTPException(status_code=400, detail="Chamado já está cancelado")
@@ -240,7 +304,7 @@ def cancelar_chamado(
     registrar_historico(
         db=db,
         chamado_id=chamado.id,
-        usuario_id=usuario_id,
+        usuario_id=current_user.id,
         acao="Cancelamento de chamado",
         descricao=f"Chamado #{chamado.protocolo} foi cancelado"
     )
@@ -251,12 +315,16 @@ def cancelar_chamado(
 @router.patch("/{chamado_id}/arquivar", response_model=ChamadoResponse)
 def arquivar_chamado(
     chamado_id: int,
-    usuario_id: int,  # Em produção, isso viria do token de autenticação
-    db: Session = Depends(get_db)
+    usuario_id: Optional[int] = USUARIO_ID_DEPRECIADO,
+    current_user: Usuario = Depends(require_staff),
+    db: Session = Depends(get_db),
 ):
     """
-    Arquiva um chamado (remove da visualização padrão mas mantém no banco)
+    Arquiva um chamado (remove da visualização padrão mas mantém no banco).
+    Restrito a administrador ou técnico.
     """
+    _avisar_usuario_id_depreciado("arquivar_chamado", usuario_id, current_user)
+
     chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
     if not chamado:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
@@ -272,7 +340,7 @@ def arquivar_chamado(
     registrar_historico(
         db=db,
         chamado_id=chamado.id,
-        usuario_id=usuario_id,
+        usuario_id=current_user.id,
         acao="Arquivamento de chamado",
         descricao=f"Chamado #{chamado.protocolo} foi arquivado"
     )
@@ -283,12 +351,16 @@ def arquivar_chamado(
 @router.patch("/{chamado_id}/desarquivar", response_model=ChamadoResponse)
 def desarquivar_chamado(
     chamado_id: int,
-    usuario_id: int,  # Em produção, isso viria do token de autenticação
-    db: Session = Depends(get_db)
+    usuario_id: Optional[int] = USUARIO_ID_DEPRECIADO,
+    current_user: Usuario = Depends(require_staff),
+    db: Session = Depends(get_db),
 ):
     """
-    Desarquiva um chamado (volta a exibir na visualização padrão)
+    Desarquiva um chamado (volta a exibir na visualização padrão).
+    Restrito a administrador ou técnico.
     """
+    _avisar_usuario_id_depreciado("desarquivar_chamado", usuario_id, current_user)
+
     chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
     if not chamado:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
@@ -304,7 +376,7 @@ def desarquivar_chamado(
     registrar_historico(
         db=db,
         chamado_id=chamado.id,
-        usuario_id=usuario_id,
+        usuario_id=current_user.id,
         acao="Desarquivamento de chamado",
         descricao=f"Chamado #{chamado.protocolo} foi desarquivado"
     )
@@ -313,9 +385,16 @@ def desarquivar_chamado(
 
 
 @router.delete("/{chamado_id}", status_code=status.HTTP_204_NO_CONTENT)
-def deletar_chamado(chamado_id: int, db: Session = Depends(get_db)):
+def deletar_chamado(
+    chamado_id: int,
+    _admin: Usuario = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     """
-    Deleta um chamado (soft delete recomendado em produção)
+    Deleta um chamado em definitivo. Restrito a administrador.
+
+    É exclusão real (db.delete), não soft delete — o registro some junto
+    com seu histórico. Para tirar da visualização use cancelar ou arquivar.
     """
     chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
     if not chamado:

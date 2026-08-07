@@ -10,7 +10,9 @@ class ComentarioBase(BaseModel):
 
 class ComentarioCreate(ComentarioBase):
     chamado_id: int
-    usuario_id: int
+    # DEPRECADO: ignorado, o autor vem do token JWT. Continua aceito só para
+    # o frontend atual não quebrar entre os dois deploys. Remover depois.
+    usuario_id: Optional[int] = None
 
 
 class ComentarioUpdate(BaseModel):

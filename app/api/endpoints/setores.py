@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.api.deps import get_db
+from app.api.deps import get_db, require_admin
 from app.models.setor import Setor
+from app.models.usuario import Usuario
 from app.schemas.setor import SetorCreate, SetorUpdate, SetorResponse
 
 router = APIRouter()
@@ -39,9 +40,13 @@ def buscar_setor(setor_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/", response_model=SetorResponse, status_code=status.HTTP_201_CREATED)
-def criar_setor(setor_data: SetorCreate, db: Session = Depends(get_db)):
+def criar_setor(
+    setor_data: SetorCreate,
+    _admin: Usuario = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     """
-    Cria um novo setor
+    Cria um novo setor. Restrito a administrador.
     """
     setor = Setor(**setor_data.model_dump())
     db.add(setor)
@@ -54,10 +59,11 @@ def criar_setor(setor_data: SetorCreate, db: Session = Depends(get_db)):
 def atualizar_setor(
     setor_id: int,
     setor_data: SetorUpdate,
-    db: Session = Depends(get_db)
+    _admin: Usuario = Depends(require_admin),
+    db: Session = Depends(get_db),
 ):
     """
-    Atualiza um setor existente
+    Atualiza um setor existente. Restrito a administrador.
     """
     setor = db.query(Setor).filter(Setor.id == setor_id).first()
     if not setor:
@@ -73,9 +79,13 @@ def atualizar_setor(
 
 
 @router.delete("/{setor_id}", status_code=status.HTTP_204_NO_CONTENT)
-def deletar_setor(setor_id: int, db: Session = Depends(get_db)):
+def deletar_setor(
+    setor_id: int,
+    _admin: Usuario = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     """
-    Desativa um setor
+    Desativa um setor. Restrito a administrador.
     """
     setor = db.query(Setor).filter(Setor.id == setor_id).first()
     if not setor:

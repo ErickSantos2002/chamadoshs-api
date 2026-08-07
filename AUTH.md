@@ -46,7 +46,11 @@ Ou copie e execute o conteúdo do arquivo `migrations/add_auth_fields.sql` diret
 
 ### 2. Registro
 
-**Endpoint:** `POST /api/v1/auth/registro`
+**Endpoint:** `POST /api/v1/auth/registro` — **exige token de administrador**
+
+O corpo aceita `role_id`, então enquanto este endpoint foi público bastava
+uma requisição sem credencial nenhuma para criar uma conta Administrador.
+Duplica `POST /api/v1/usuarios/`, e é mantido só por compatibilidade.
 
 **Request:**
 ```json
@@ -171,22 +175,133 @@ curl -X GET "http://localhost:8000/api/v1/chamados/" \
 ### Rotas Públicas (sem autenticação)
 
 - `POST /api/v1/auth/login` - Login
-- `POST /api/v1/auth/registro` - Registro
 - `GET /` - Root
-- `GET /health` - Health check
+- `GET /health` - Health check (usado pelo HEALTHCHECK do Docker e pelo EasyPanel)
 
-### Rotas Protegidas (requerem autenticação)
+Essas são as únicas. Toda rota sob `/api/v1` exige token.
 
-Todas as outras rotas da API requerem autenticação. Para proteger um endpoint, use a dependency `get_current_user`:
+### Como a autenticação é aplicada
+
+A dependency entra no `include_router`, em `main.py`, e não endpoint a
+endpoint — assim a política inteira cabe numa tela e um endpoint novo já
+nasce protegido:
 
 ```python
-from app.api.deps import get_current_user
-from app.models.usuario import Usuario
-
-@router.get("/exemplo")
-def exemplo_protegido(current_user: Usuario = Depends(get_current_user)):
-    return {"usuario": current_user.nome}
+app.include_router(
+    chamados.router,
+    prefix="/api/v1/chamados",
+    tags=["Chamados"],
+    dependencies=[Depends(get_current_user)],
+)
 ```
+
+O `main.py` tem uma trava de inicialização que percorre as rotas registradas
+e levanta `RuntimeError` se alguma rota `/api/v1` não exigir
+`get_current_user`. Esquecer a proteção de um endpoint novo impede a
+aplicação de subir, em vez de virar um buraco silencioso em produção. Se a
+rota for pública de propósito, registre-a em `ROTAS_PUBLICAS`.
+
+### Restrições por perfil
+
+Perfis: `Administrador` (role_id 1), `Tecnico` (2), `Usuario` (3).
+
+Use as dependencies de `app/api/deps.py`:
+
+```python
+from app.api.deps import require_admin, require_staff
+
+@router.delete("/{item_id}")
+def excluir(item_id: int, _admin: Usuario = Depends(require_admin)):
+    ...
+```
+
+- `require_admin` — só Administrador
+- `require_staff` — Administrador ou Técnico
+- `require_roles("A", "B")` — fábrica, para combinações fora dessas duas
+- `is_admin(u)` / `is_staff(u)` — predicados, para regras de dono-ou-admin
+  dentro do handler
+
+O perfil é lido do banco, não da claim do JWT: a claim fica congelada até o
+token expirar, então rebaixar alguém só surtiria efeito na renovação.
+
+**Administrador:** criar, editar e desativar usuários; criar, editar e
+excluir setores e categorias; alterar prazos de SLA; excluir chamado;
+`POST /api/v1/auth/registro`; `/api/v1/diagnostico`.
+
+**Administrador ou Técnico:** atualizar, arquivar e desarquivar chamados;
+criar, editar e excluir tarefas recorrentes; criar e enxergar comentário
+interno.
+
+**Qualquer usuário autenticado:** leitura em geral; abrir chamado; cancelar
+o próprio chamado; comentar; registrar execução de tarefa recorrente.
+
+### Contrato de erro
+
+- **401** — token ausente, inválido ou expirado. O frontend redireciona para
+  o login.
+- **403** — token válido, perfil insuficiente. O frontend deve exibir erro de
+  permissão e **não** redirecionar.
+
+O `HTTPBearer` é construído com `auto_error=False` justamente por isso: no
+padrão, header ausente produz 403, que o frontend interpretaria como
+problema de permissão em vez de sessão expirada.
+
+### Identidade e trilha de auditoria
+
+O autor de qualquer ação vem sempre do token, nunca do corpo ou da query
+string. Os campos `usuario_id` em chamados, comentários e execução de tarefa
+recorrente estão **depreciados**: continuam sendo aceitos e ignorados, com
+`logger.warning` a cada uso, apenas para o frontend atual não quebrar na
+janela entre os deploys dos dois repositórios. Remover assim que o aviso
+parar de aparecer nos logs.
+
+### Documentação interativa
+
+`/docs`, `/redoc` e `/openapi.json` só existem quando `ENVIRONMENT` é
+`development`. O padrão de `ENVIRONMENT` é `production`, para que esquecer a
+variável no deploy não deixe a documentação exposta.
+
+O `/api/v1/diagnostico` continua registrado em todos os ambientes, porque
+serve justamente para investigar problema de deploy, mas exige administrador.
+Ressalva de bootstrap: num banco onde ninguém tem senha não há como
+autenticar, e portanto não há como consultá-lo — nesse caso a verificação é
+por SQL direto no banco.
+
+## Proteção contra força bruta no login
+
+Com toda a API exigindo token, `POST /api/v1/auth/login` virou o único ponto
+de entrada, e aceitava tentativas ilimitadas. Passa a ter dois limitadores de
+**tentativas falhas** em janela deslizante, definidos em
+`app/core/rate_limit.py`:
+
+| Limite | Padrão | Contém |
+|---|---|---|
+| `LOGIN_MAX_FALHAS_POR_USUARIO` | 10 / 15 min | Ataque a uma conta específica, mesmo distribuído em vários IPs |
+| `LOGIN_MAX_FALHAS_POR_IP` | 50 / 15 min | Varredura de muitos usuários a partir de uma origem |
+
+Ao estourar, a resposta é **429** com header `Retry-After` em segundos. A
+verificação acontece antes de qualquer consulta ao banco, então a tentativa
+bloqueada não custa I/O nem cálculo de hash bcrypt. Um login bem-sucedido
+zera as duas contagens, para não punir quem errou a senha algumas vezes antes
+de acertar. A contagem por usuário ignora caixa, como o próprio login.
+
+O limite por IP é folgado de propósito: num escritório atrás de um único IP
+público, todo mundo compartilha a contagem, e um valor apertado derrubaria o
+time inteiro numa manhã de segunda. O limite por usuário é a defesa
+principal, porque não depende do IP de origem.
+
+**`PROXY_HOPS_CONFIAVEIS`** diz quantos proxies existem à frente da aplicação
+(Easypanel/Traefik = 1). O IP é lido de trás para frente no
+`X-Forwarded-For`, porque cada proxy anexa ao fim o endereço que enxergou: o
+último elemento foi escrito pela nossa própria infraestrutura, enquanto o
+primeiro veio do cliente e é falsificável. Ler o primeiro permitiria furar o
+limite por IP à vontade. Com `0`, o header é ignorado e vale o IP da conexão.
+
+**Limitação conhecida:** o estado fica em memória e por processo. Não
+sobrevive a restart do container, e com o `CMD` atual (uvicorn sem
+`--workers`) há um processo só, então a contagem é exata. Passando a vários
+workers, cada um teria sua própria contagem e o limite efetivo seria
+multiplicado — nesse cenário o armazenamento precisa migrar para Redis.
 
 ## Configuração do Token JWT
 
@@ -195,13 +310,17 @@ As configurações do JWT estão no arquivo `.env`:
 ```env
 SECRET_KEY=sua_chave_secreta_aqui
 ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=30
+ACCESS_TOKEN_EXPIRE_MINUTES=480
 ```
 
 **IMPORTANTE:**
 - Gere uma `SECRET_KEY` segura: `python -c "import secrets; print(secrets.token_hex(32))"`
 - Em produção, use uma chave forte e mantenha em segredo
-- Tokens expiram em 30 minutos por padrão (ajuste conforme necessário)
+- Tokens expiram em 8 horas por padrão, para cobrir um turno de trabalho.
+  Era 30 minutos, o que passava despercebido enquanto quase nenhuma rota
+  validava o token; com a API inteira exigindo token, 30 minutos
+  desconectaria o usuário no meio do expediente. Para sessão curta, use
+  `POST /api/v1/auth/refresh` antes de reduzir esse valor.
 
 ## Fluxo de Autenticação
 
@@ -297,18 +416,10 @@ VALUES (
 );
 ```
 
-Ou via API após deploy:
-
-```bash
-curl -X POST "http://localhost:8000/api/v1/auth/registro" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "nome": "admin",
-    "senha": "admin123",
-    "role_id": 1,
-    "ativo": true
-  }'
-```
+Esse SQL é o **único** caminho para o primeiro administrador de um banco
+vazio. `POST /api/v1/auth/registro` e `POST /api/v1/usuarios/` exigem um
+administrador já autenticado, então não servem para o bootstrap — e não
+devem ser reabertos para isso.
 
 ## Segurança
 
