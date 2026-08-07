@@ -267,6 +267,41 @@ Ressalva de bootstrap: num banco onde ninguém tem senha não há como
 autenticar, e portanto não há como consultá-lo — nesse caso a verificação é
 por SQL direto no banco.
 
+## Proteção contra força bruta no login
+
+Com toda a API exigindo token, `POST /api/v1/auth/login` virou o único ponto
+de entrada, e aceitava tentativas ilimitadas. Passa a ter dois limitadores de
+**tentativas falhas** em janela deslizante, definidos em
+`app/core/rate_limit.py`:
+
+| Limite | Padrão | Contém |
+|---|---|---|
+| `LOGIN_MAX_FALHAS_POR_USUARIO` | 10 / 15 min | Ataque a uma conta específica, mesmo distribuído em vários IPs |
+| `LOGIN_MAX_FALHAS_POR_IP` | 50 / 15 min | Varredura de muitos usuários a partir de uma origem |
+
+Ao estourar, a resposta é **429** com header `Retry-After` em segundos. A
+verificação acontece antes de qualquer consulta ao banco, então a tentativa
+bloqueada não custa I/O nem cálculo de hash bcrypt. Um login bem-sucedido
+zera as duas contagens, para não punir quem errou a senha algumas vezes antes
+de acertar. A contagem por usuário ignora caixa, como o próprio login.
+
+O limite por IP é folgado de propósito: num escritório atrás de um único IP
+público, todo mundo compartilha a contagem, e um valor apertado derrubaria o
+time inteiro numa manhã de segunda. O limite por usuário é a defesa
+principal, porque não depende do IP de origem.
+
+**`PROXY_HOPS_CONFIAVEIS`** diz quantos proxies existem à frente da aplicação
+(Easypanel/Traefik = 1). O IP é lido de trás para frente no
+`X-Forwarded-For`, porque cada proxy anexa ao fim o endereço que enxergou: o
+último elemento foi escrito pela nossa própria infraestrutura, enquanto o
+primeiro veio do cliente e é falsificável. Ler o primeiro permitiria furar o
+limite por IP à vontade. Com `0`, o header é ignorado e vale o IP da conexão.
+
+**Limitação conhecida:** o estado fica em memória e por processo. Não
+sobrevive a restart do container, e com o `CMD` atual (uvicorn sem
+`--workers`) há um processo só, então a contagem é exata. Passando a vários
+workers, cada um teria sua própria contagem e o limite efetivo seria
+multiplicado — nesse cenário o armazenamento precisa migrar para Redis.
 
 ## Configuração do Token JWT
 
