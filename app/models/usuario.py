@@ -14,6 +14,16 @@ class Usuario(Base):
     setor_id = Column(Integer, ForeignKey("setores.id"))
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=False)
     ativo = Column(Boolean, default=True)
+    # Conta que não representa uma pessoa: painel de parede, integração, login
+    # compartilhado. Distinta de `ativo` — estas contas precisam autenticar, e
+    # `get_current_user` recusa usuário inativo.
+    #
+    # server_default além do default: o default do Python só vale para linhas
+    # criadas pelo ORM. Sem o server_default, um INSERT por SQL direto (o
+    # criar_usuario_inicial.sql, por exemplo) violaria o NOT NULL.
+    conta_de_servico = Column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     created_at = Column(TIMESTAMP, default=agora_brasilia)
     updated_at = Column(TIMESTAMP, default=agora_brasilia, onupdate=agora_brasilia)
 

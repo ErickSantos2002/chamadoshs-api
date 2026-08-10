@@ -13,6 +13,18 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 ## [Não publicado]
 
 ### Adicionado
+- **`usuarios.conta_de_servico`** (`BOOLEAN NOT NULL DEFAULT false`), exposto em
+  `UsuarioResponse` e aceito em `UsuarioCreate` e `UsuarioUpdate`. Marca contas
+  que não representam pessoas — painel de parede, integração, login
+  compartilhado. Elas precisam autenticar, então desativar não servia:
+  `get_current_user` recusa usuário inativo. O campo descreve o que a conta é,
+  não uma permissão derivada, para servir a outros usos além do seletor de
+  técnico. Migration em `migrations/2026-08-10-add-conta-de-servico.sql`.
+- `PUT /api/v1/chamados/{id}` recusa com **400** atribuir um chamado a uma conta
+  de serviço, e devolve 400 em vez de 500 quando o técnico informado não existe.
+  A validação só roda quando `tecnico_responsavel_id` vem na requisição: olhar o
+  técnico já gravado tornaria ineditável um chamado cuja pessoa atribuída
+  virasse conta de serviço depois.
 - Estrutura de testes com pytest, em `requirements-dev.txt` separado do de
   produção — o Dockerfile instala apenas o de produção, então nada de teste
   vai para a imagem publicada.
@@ -65,6 +77,12 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   inversa, o n8n recusa os envios e os técnicos deixam de ser notificados sem
   que nada falhe visivelmente — o sintoma aparece só no log, como `ERROR` com
   status 401/403.
+- **Migration `migrations/2026-08-10-add-conta-de-servico.sql`**: aplicar
+  **antes** de subir a imagem. O model já declara a coluna, então o código novo
+  contra o banco antigo quebra qualquer leitura de usuário. Idempotente
+  (`ADD COLUMN IF NOT EXISTS`); sem reversão automática — o rollback é o backup.
+  Marcar as contas de serviço é um `UPDATE` separado, comentado no fim do
+  arquivo, para ser rodado depois de conferir os nomes.
 
 ## [1.1.0] — 2026-08-07
 

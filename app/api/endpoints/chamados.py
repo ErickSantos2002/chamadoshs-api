@@ -64,6 +64,45 @@ def _avisar_usuario_id_depreciado(endpoint: str, usuario_id: Optional[int], atua
         )
 
 
+def _validar_tecnico_responsavel(db: Session, chamado_data: ChamadoUpdate) -> None:
+    """
+    Recusa atribuir um chamado a uma conta que não é pessoa.
+
+    O seletor do frontend já filtra contas de serviço, mas filtro de tela é
+    convenção, não garantia: `tecnico_responsavel_id` é FK crua e a API aceita
+    qualquer id que exista na tabela.
+
+    Só valida quando o campo vem na requisição — `model_fields_set`, não o
+    valor. Validar o técnico atual em todo PUT tornaria um chamado ineditável
+    caso a pessoa atribuída virasse conta de serviço depois: mudar o status ou
+    escrever a solução passaria a falhar por causa de um campo que a
+    requisição nem toca.
+
+    `None` explícito é desatribuição, e continua permitido.
+    """
+    if "tecnico_responsavel_id" not in chamado_data.model_fields_set:
+        return
+
+    tecnico_id = chamado_data.tecnico_responsavel_id
+    if tecnico_id is None:
+        return
+
+    tecnico = db.query(Usuario).filter(Usuario.id == tecnico_id).first()
+    if tecnico is None:
+        # Sem esta checagem o id inexistente só estouraria como violação de
+        # chave estrangeira no commit, virando 500 em vez de erro do cliente.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Técnico responsável não encontrado",
+        )
+
+    if tecnico.conta_de_servico:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Não é possível atribuir um chamado a uma conta de serviço",
+        )
+
+
 def _anexar_sla(chamados: List[Chamado], db: Session) -> List[Chamado]:
     """
     Calcula e anexa o bloco `sla` a cada chamado.
@@ -232,6 +271,9 @@ def atualizar_chamado(
     chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
     if not chamado:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
+
+    # Depois do 404: chamado inexistente é 404, não 400 por causa do técnico.
+    _validar_tecnico_responsavel(db, chamado_data)
 
     # Armazenar status anterior e técnico anterior para histórico e webhook
     status_anterior = chamado.status
