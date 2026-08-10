@@ -404,17 +404,21 @@ function logout() {
 
 Após executar a migration, você pode criar um usuário inicial:
 
-```sql
--- Criar usuário admin (senha: admin123)
--- Hash gerado com bcrypt
-INSERT INTO usuarios (nome, senha_hash, role_id, ativo)
-VALUES (
-  'admin',
-  '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5FS2B2c5ymNSm',
-  1,
-  true
-);
+Use `criar_usuario_inicial.sql`, que pede o hash na hora da execução. Nenhuma
+senha (nem o hash dela) fica versionada — este repositório é público.
+
+```bash
+# 1) Gerar o hash da senha escolhida, com o mesmo algoritmo da API
+python -c "from passlib.context import CryptContext; \
+  import getpass; \
+  print(CryptContext(schemes=['bcrypt']).hash(getpass.getpass('Senha: ')))"
+
+# 2) Criar o admin com esse hash
+psql -d chamados_db -v senha_hash_admin="'\$2b\$12\$...'" -f criar_usuario_inicial.sql
 ```
+
+O script usa `ON CONFLICT (nome) DO NOTHING`: se o admin já existir, a senha
+dele **não** é sobrescrita.
 
 Esse SQL é o **único** caminho para o primeiro administrador de um banco
 vazio. `POST /api/v1/auth/registro` e `POST /api/v1/usuarios/` exigem um
