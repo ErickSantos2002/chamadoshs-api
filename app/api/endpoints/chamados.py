@@ -44,7 +44,18 @@ USUARIO_ID_DEPRECIADO = Query(
 
 
 def _avisar_usuario_id_depreciado(endpoint: str, usuario_id: Optional[int], atual: Usuario) -> None:
-    if usuario_id is not None and usuario_id != atual.id:
+    # A condição é apenas `is not None`, de propósito.
+    #
+    # Antes havia também `usuario_id != atual.id`, e isso tornava o aviso
+    # inútil como sinal de desligamento: o caso normal — a pessoa logada
+    # agindo em nome de si mesma, mandando o próprio id — passava silencioso.
+    # O log podia estar zerado com o frontend enviando o parâmetro em 100% das
+    # chamadas, e remover o suporte no backend quebraria produção.
+    #
+    # Agora conta o que interessa: quantas chamadas ainda mandam o parâmetro.
+    # O volume é alto enquanto o frontend não for atualizado — é o baseline
+    # esperado, não um defeito.
+    if usuario_id is not None:
         logger.warning(
             "param usuario_id depreciado em %s: recebido %s, usando %s (do token)",
             endpoint,

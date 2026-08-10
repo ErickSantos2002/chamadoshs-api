@@ -174,7 +174,9 @@ def realizar_tarefa(
     Quem realizou vem do token: aceitar do corpo permitia registrar a
     execução em nome de outra pessoa.
     """
-    if dados.usuario_id is not None and dados.usuario_id != current_user.id:
+    # Só `is not None`: o aviso conta quem ainda manda o campo, não quem manda
+    # o id de outra pessoa. Ver a nota em chamados.py.
+    if dados.usuario_id is not None:
         logger.warning(
             "campo usuario_id depreciado em realizar_tarefa: recebido %s, usando %s (do token)",
             dados.usuario_id,

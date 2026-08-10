@@ -16,11 +16,11 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 - Estrutura de testes com pytest, em `requirements-dev.txt` separado do de
   produção — o Dockerfile instala apenas o de produção, então nada de teste
   vai para a imagem publicada.
-- 121 testes cobrindo o limitador de login, o motor de horas úteis, as regras
-  de SLA, o cálculo de recorrência e o envio de webhook. Nenhum depende de
-  banco ou do relógio real: os instantes são passados por parâmetro, o que
-  mantém o resultado estável mesmo com o container em UTC e o sistema
-  operando em horário de Brasília.
+- 133 testes cobrindo o limitador de login, o motor de horas úteis, as regras
+  de SLA, o cálculo de recorrência, o envio de webhook e o aviso de
+  `usuario_id` depreciado. Nenhum depende de banco ou do relógio real: os
+  instantes são passados por parâmetro, o que mantém o resultado estável mesmo
+  com o container em UTC e o sistema operando em horário de Brasília.
 
 ### Alterado
 - A URL do webhook do n8n saiu do código e virou `WEBHOOK_TECNICO_URL`. O
@@ -28,8 +28,29 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   notificação no fluxo de produção por descuido.
 - `print()` do serviço de webhook trocado por `logging`, sem nunca registrar
   a URL.
+- **Aviso `param usuario_id depreciado` corrigido.** A condição exigia que o
+  id recebido fosse diferente do id do token, e por isso o caso mais comum —
+  a pessoa logada agindo em nome de si mesma — não gerava aviso nenhum. O log
+  podia estar zerado com o frontend enviando o parâmetro em todas as chamadas.
+  Agora o aviso dispara sempre que o parâmetro chega, nos seis pontos. O
+  volume sobe enquanto o frontend não for atualizado: é o baseline esperado.
 
 ### Segurança
+- **Header de autenticação no webhook do n8n.** Até aqui a URL era a única
+  credencial: quem conhecesse o endereço disparava o fluxo. O backend passa a
+  enviar `WEBHOOK_TECNICO_TOKEN` no header `X-Webhook-Token`, para o nó
+  Webhook validar via Header Auth. Token vazio não envia header, o que permite
+  subir o backend antes de ligar a exigência no n8n. Nem a URL nem o token
+  aparecem no log.
+- **Credenciais em texto claro removidas do HEAD.** `criar_usuario_inicial.sql`
+  e `AUTH.md` traziam usuário `admin` com senha e hash bcrypt embutidos, num
+  repositório público. O script passa a receber o hash por variável do psql,
+  sem valor padrão. As senhas seguem no histórico do Git e devem ser
+  consideradas comprometidas.
+- **`criar_usuario_inicial.sql` deixou de ser destrutivo.** Fazia
+  `DELETE FROM usuarios WHERE nome = 'admin'` seguido de `INSERT` com hash
+  fixo: rodado por engano em produção, redefiniria a senha do administrador
+  para a que vazou. Trocado por `ON CONFLICT (nome) DO NOTHING`.
 - A URL antiga do webhook permanece no histórico do Git e deve ser
   considerada comprometida. O identificador do fluxo embutido nela é o que
   autoriza a escrita no n8n, ou seja, funciona como credencial.
@@ -39,6 +60,11 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   de ser enviado**, já que o padrão é desligado.
 - Gerar um webhook novo no n8n e aposentar o antigo, em vez de reaproveitar a
   URL que está no histórico.
+- **`WEBHOOK_TECNICO_TOKEN`**: gerar com `openssl rand -hex 32` e configurar no
+  Easypanel **antes** de mudar o nó Webhook do n8n para Header Auth. Na ordem
+  inversa, o n8n recusa os envios e os técnicos deixam de ser notificados sem
+  que nada falhe visivelmente — o sintoma aparece só no log, como `ERROR` com
+  status 401/403.
 
 ## [1.1.0] — 2026-08-07
 
@@ -127,7 +153,9 @@ sem token.
 - Os campos `usuario_id` em chamados, comentários e execução de tarefa
   recorrente. Continuam sendo aceitos e **ignorados**, com `logger.warning` a
   cada uso, apenas para o frontend não quebrar na janela entre os deploys dos
-  dois repositórios. A remoção depende de o aviso zerar nos logs.
+  dois repositórios. A remoção depende de o aviso zerar nos logs — ver a
+  correção do aviso em [Não publicado], sem a qual essa contagem não valia
+  como sinal.
 
 ### Ação necessária no deploy
 

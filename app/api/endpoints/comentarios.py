@@ -73,7 +73,9 @@ def criar_comentario(
     O autor vem do token. Só administrador e técnico podem marcar o
     comentário como interno.
     """
-    if comentario_data.usuario_id is not None and comentario_data.usuario_id != current_user.id:
+    # Só `is not None`: o aviso conta quem ainda manda o campo, não quem manda
+    # o id de outra pessoa. Ver a nota em chamados.py.
+    if comentario_data.usuario_id is not None:
         logger.warning(
             "campo usuario_id depreciado em criar_comentario: recebido %s, usando %s (do token)",
             comentario_data.usuario_id,
