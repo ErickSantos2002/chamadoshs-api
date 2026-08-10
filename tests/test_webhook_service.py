@@ -39,8 +39,8 @@ def capturar_post(monkeypatch):
     """Substitui requests.post e devolve a lista de chamadas registradas."""
     chamadas = []
 
-    def falso_post(url, json=None, timeout=None):
-        chamadas.append({"url": url, "json": json, "timeout": timeout})
+    def falso_post(url, json=None, timeout=None, headers=None):
+        chamadas.append({"url": url, "json": json, "timeout": timeout, "headers": headers})
         return SimpleNamespace(status_code=200)
 
     monkeypatch.setattr(webhook_service.requests, "post", falso_post)
@@ -95,6 +95,65 @@ def test_payload_tem_o_formato_esperado(capturar_post, url_configurada):
         "tecnico": "Sem atribuição",
         "acao": "atribuido",
     }
+
+
+def test_sem_token_nao_envia_header(capturar_post, url_configurada, monkeypatch):
+    """
+    Padrão sem header: é o que permite subir o backend antes de ligar o
+    Header Auth no n8n, sem janela de falha.
+    """
+    monkeypatch.setattr(settings, "WEBHOOK_TECNICO_TOKEN", "")
+    webhook_service.enviar_webhook_tecnico(_BancoFalso(), "CH-1", "Título")
+
+    assert capturar_post[0]["headers"] == {}
+
+
+def test_com_token_envia_o_header(capturar_post, url_configurada, monkeypatch):
+    monkeypatch.setattr(settings, "WEBHOOK_TECNICO_TOKEN", "segredo-do-fluxo")
+    webhook_service.enviar_webhook_tecnico(_BancoFalso(), "CH-1", "Título")
+
+    assert capturar_post[0]["headers"] == {"X-Webhook-Token": "segredo-do-fluxo"}
+
+
+def test_nome_do_header_e_configuravel(capturar_post, url_configurada, monkeypatch):
+    """O nome do header precisa bater com o que for cadastrado no n8n."""
+    monkeypatch.setattr(settings, "WEBHOOK_TECNICO_TOKEN", "segredo-do-fluxo")
+    monkeypatch.setattr(settings, "WEBHOOK_TECNICO_HEADER", "X-Outro-Nome")
+    webhook_service.enviar_webhook_tecnico(_BancoFalso(), "CH-1", "Título")
+
+    assert capturar_post[0]["headers"] == {"X-Outro-Nome": "segredo-do-fluxo"}
+
+
+def test_token_nunca_aparece_no_log(caplog, capturar_post, url_configurada, monkeypatch):
+    """
+    O token vale como credencial, tanto quanto a URL: não pode acabar no log
+    do container.
+    """
+    monkeypatch.setattr(settings, "WEBHOOK_TECNICO_TOKEN", "segredo-do-fluxo")
+
+    with caplog.at_level("DEBUG"):
+        webhook_service.enviar_webhook_tecnico(_BancoFalso(), "CH-1", "Título")
+
+    assert "segredo-do-fluxo" not in caplog.text
+
+
+@pytest.mark.parametrize("status_recusado", [401, 403])
+def test_recusa_por_autenticacao_e_registrada(monkeypatch, url_configurada, caplog, status_recusado):
+    """
+    n8n exigindo Header Auth com o backend sem o segredo: o chamado é criado e
+    ninguém é notificado. O log é o único lugar onde isso aparece.
+    """
+    def falso_post(*args, **kwargs):
+        return SimpleNamespace(status_code=status_recusado)
+
+    monkeypatch.setattr(webhook_service.requests, "post", falso_post)
+    monkeypatch.setattr(settings, "WEBHOOK_TECNICO_TOKEN", "segredo-do-fluxo")
+
+    with caplog.at_level("ERROR"):
+        webhook_service.enviar_webhook_tecnico(_BancoFalso(), "CH-1", "Título")
+
+    assert "WEBHOOK_TECNICO_TOKEN" in caplog.text
+    assert "segredo-do-fluxo" not in caplog.text
 
 
 @pytest.mark.parametrize(

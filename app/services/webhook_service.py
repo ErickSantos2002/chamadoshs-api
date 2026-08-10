@@ -23,6 +23,10 @@ def enviar_webhook_tecnico(
     é o padrão, para que desenvolvimento e testes não disparem notificação no
     fluxo de produção por descuido.
 
+    Quando WEBHOOK_TECNICO_TOKEN está definida, o valor vai no header de
+    autenticação esperado pelo nó Webhook do n8n (Header Auth). Sem ela, o
+    header não é enviado — ver a nota em `config.py` sobre a ordem de subida.
+
     Args:
         db: Sessão do banco de dados
         protocolo: Protocolo do chamado
@@ -53,17 +57,36 @@ def enviar_webhook_tecnico(
             "acao": acao
         }
 
+        # Header de autenticação, quando configurado. Montado aqui e não em
+        # nível de módulo para que uma troca do segredo valha na reinicialização
+        # do container, sem depender da ordem de import.
+        headers = {}
+        if settings.WEBHOOK_TECNICO_TOKEN:
+            headers[settings.WEBHOOK_TECNICO_HEADER] = settings.WEBHOOK_TECNICO_TOKEN
+
         # Enviar webhook
         response = requests.post(
             settings.WEBHOOK_TECNICO_URL,
             json=payload,
             timeout=settings.WEBHOOK_TIMEOUT_SEGUNDOS,
+            headers=headers,
         )
 
-        # Log do resultado. A URL nunca é registrada: ela contém o
-        # identificador do fluxo no n8n e vale como credencial.
+        # Log do resultado. Nem a URL nem o token são registrados: os dois
+        # valem como credencial do fluxo no n8n.
         if response.status_code == 200:
             logger.info("Webhook enviado com sucesso para o chamado %s", protocolo)
+        elif response.status_code in (401, 403):
+            # Caso típico de configuração torta: o n8n já exige Header Auth e o
+            # backend ainda não tem o segredo (ou tem o segredo errado). Vale
+            # uma mensagem própria porque o sintoma — chamado criado, técnico
+            # não notificado — é silencioso do lado de quem usa o sistema.
+            logger.error(
+                "Webhook recusado com status %s para o chamado %s: "
+                "verifique se WEBHOOK_TECNICO_TOKEN confere com o Header Auth do n8n",
+                response.status_code,
+                protocolo,
+            )
         else:
             logger.warning(
                 "Webhook retornou status %s para o chamado %s",

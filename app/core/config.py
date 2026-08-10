@@ -49,6 +49,19 @@ class Settings(BaseSettings):
     WEBHOOK_TECNICO_URL: str = ""
     WEBHOOK_TIMEOUT_SEGUNDOS: int = 5
 
+    # Segredo compartilhado com o nó Webhook do n8n (Header Auth).
+    #
+    # Sem ele, a URL é a única credencial: quem descobre o endereço dispara o
+    # fluxo. Com ele, o n8n recusa qualquer requisição que não traga o header.
+    #
+    # Vazio = header não é enviado. Isso é proposital e é o que permite subir
+    # o backend ANTES de ligar o Header Auth no n8n, sem janela de falha:
+    # enquanto o n8n estiver em Authentication None, um header a mais é
+    # simplesmente ignorado. Ligue o n8n só depois que a variável estiver
+    # configurada e o container reiniciado.
+    WEBHOOK_TECNICO_TOKEN: str = ""
+    WEBHOOK_TECNICO_HEADER: str = "X-Webhook-Token"
+
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:5173"
 
