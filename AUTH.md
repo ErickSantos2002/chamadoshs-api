@@ -148,6 +148,29 @@ Authorization: Bearer {seu_token_jwt}
 }
 ```
 
+**Erros:**
+- `401 Unauthorized`: token ausente, inválido **ou expirado**
+
+#### A renovação precisa ser antecipada, não reativa
+
+`/auth/refresh` depende de `get_current_user` como qualquer outra rota
+protegida. Com o token já expirado ele responde **401**, igual às demais — não
+existe caminho de "token vencido entra, token novo sai".
+
+Isso descarta o padrão comum de renovar reagindo ao 401: quando o 401 chega, o
+token que seria usado para renovar já não vale. O cliente tem de renovar
+**antes** do vencimento. O frontend faz isso no interceptor, disparando o
+refresh quando falta menos de 30 minutos para expirar.
+
+Aceitar token expirado neste endpoint — validando a assinatura e ignorando o
+`exp` — resolveria o refresh reativo e é uma má ideia: o `exp` deixaria de
+significar qualquer coisa, e um access token vazado meses antes continuaria
+trocável por um novo indefinidamente. Refresh reativo feito direito exige um
+*refresh token* separado, com expiração, armazenamento e revogação próprios.
+Enquanto isso não existir, a renovação antecipada é o desenho correto e a
+expiração de 8 horas (`ACCESS_TOKEN_EXPIRE_MINUTES=480`) é o que a torna
+confortável.
+
 ## Como Usar em Requisições
 
 ### 1. Fazer Login
