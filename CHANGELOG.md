@@ -41,6 +41,13 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   intocado. Mexer no status de um chamado antigo de título curto continua
   funcionando; há teste para isso.
 
+  O legado foi medido antes da regra entrar, em 11/08/2026: de **145 chamados**,
+  ficariam abaixo do mínimo **26 títulos, 30 descrições e 37 soluções**. Nenhum
+  deles fica travado — os 37 de solução curta seguem editáveis por qualquer
+  outro campo. Os números também justificam a regra: solução com menos de 10
+  caracteres é "ok" e "resolvido", ou seja, cerca de um em cada quatro chamados
+  não registrou o que foi feito.
+
   A restrição fica em `ChamadoCreate`/`ChamadoUpdate`, e não em `ChamadoBase`,
   porque `ChamadoResponse` herda da base e o FastAPI valida a resposta contra
   ela: o mínimo na base faria todo chamado antigo de título curto — que
