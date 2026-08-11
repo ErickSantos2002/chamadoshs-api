@@ -25,21 +25,28 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   A validação só roda quando `tecnico_responsavel_id` vem na requisição: olhar o
   técnico já gravado tornaria ineditável um chamado cuja pessoa atribuída
   virasse conta de serviço depois.
-- **Tamanho mínimo de `titulo` (10) e `descricao` (20) na criação de chamado**,
-  igualando a API ao que o frontend passou a exigir. A contagem é sobre o texto
-  aparado, senão a barra de espaço satisfaz o mínimo; o valor também é gravado
-  sem os espaços das pontas.
+- **Tamanho mínimo dos campos de texto do chamado**, igualando a API ao que o
+  frontend passou a exigir: `titulo` 10, `descricao` 20, `solucao` 10. Vale na
+  criação (`POST`) e na edição (`PUT`). A contagem é sobre o texto aparado,
+  senão a barra de espaço satisfaz o mínimo; o valor também é gravado sem os
+  espaços das pontas.
 
-  Vale **só no `POST`**. A restrição fica em `ChamadoCreate`, e não em
-  `ChamadoBase`, porque `ChamadoResponse` herda da base e o FastAPI valida a
-  resposta contra ela: o mínimo na base faria todo chamado antigo de título
-  curto — que existe, porque a API aceitou qualquer tamanho até aqui — virar
+  `solucao` guarda também o **motivo do cancelamento** — o `PATCH /cancelar`
+  não tem corpo, então o motivo chega por `PUT {solucao}` e cai na mesma
+  coluna. O mínimo vale para os dois, o que é o desejado: cancelar com "x" não
+  passa por uma porta que resolver com "x" não passa.
+
+  Exigir na edição **não trava chamado legado**, porque o que não vem na
+  requisição não é validado (`exclude_unset`) e o frontend não reenvia valor
+  intocado. Mexer no status de um chamado antigo de título curto continua
+  funcionando; há teste para isso.
+
+  A restrição fica em `ChamadoCreate`/`ChamadoUpdate`, e não em `ChamadoBase`,
+  porque `ChamadoResponse` herda da base e o FastAPI valida a resposta contra
+  ela: o mínimo na base faria todo chamado antigo de título curto — que
+  existe, porque a API aceitou qualquer tamanho até aqui — virar
   `ResponseValidationError`, ou seja, **500 no GET e na listagem**. Há teste
   cobrindo isso.
-
-  Ainda **não** vale no `PUT`, nem para `solucao` (campo só de update):
-  depende de contar quantos chamados em produção ficariam abaixo do mínimo,
-  porque exigir na edição travaria registro legado.
 - **Trava de divergência entre o `.sql` e os models**
   (`tests/test_schema_sql_bate_com_os_models.py`). Lê o `schema_chamados.sql` e
   compara tabelas e colunas com `Base.metadata`, nos dois sentidos. Coluna nova
@@ -147,6 +154,20 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 - **`PATCH /chamados/{id}/avaliar`**: subir a API **antes** de ligar o widget
   de estrelas no frontend. Rota nova, sem migration — a ordem inversa faria o
   front chamar um caminho que ainda devolve 404. Nada a configurar.
+- **Tamanho mínimo dos textos: FRONTEND PRIMEIRO, API DEPOIS.** É o inverso da
+  ordem usual deste projeto, e não é preferência.
+
+  O frontend em produção trata `detail` como string em 26 lugares
+  (`setError(err.response.data.detail)`). O 422 do FastAPI devolve `detail`
+  como **lista de objetos**: o estado recebe um array, o React não renderiza
+  objeto como filho e **a tela fica branca**. Não é a tela nova — é a que está
+  no ar agora. Subindo a API primeiro, o primeiro título curto que alguém
+  digitar derruba a tela dessa pessoa.
+
+  A correção está no interceptor do `api.ts` do frontend, que normaliza
+  `detail` para string em um ponto só. Ela precisa estar em produção **antes**
+  de esta versão da API subir. Rodar o frontend novo contra a API antiga é
+  seguro: sem validação de tamanho, o 422 simplesmente não acontece.
 
 ## [1.1.0] — 2026-08-07
 

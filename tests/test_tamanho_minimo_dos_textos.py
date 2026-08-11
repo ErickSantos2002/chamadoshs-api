@@ -8,10 +8,15 @@ enquanto a pessoa usasse a tela.
 A contagem é sobre o texto sem espaço nas pontas — sem isso, segurar a barra
 de espaço satisfaz o mínimo e a validação vira enfeite.
 
-Escopo: **só a criação**. A regra no update depende de quantos chamados
-antigos ficariam abaixo desses números, o que exige contar em produção; até
-lá, exigir no update travaria a edição de registro legado. `solucao` é campo
-exclusivo do update, então também está fora por enquanto.
+Vale na criação e na edição. Exigir na edição não trava registro legado
+porque o frontend não reenvia valor intocado — `titulo` e `descricao` ele
+nunca manda, e `solucao` só vai quando muda. O que garante isso do lado da
+API é o `exclude_unset`: campo ausente da requisição não é validado nem
+gravado. `TestLegadoContinuaEditavel` é o teste que segura essa promessa.
+
+`solucao` guarda também o motivo do cancelamento — o `PATCH /cancelar` não
+tem corpo, então o motivo chega por `PUT {solucao}`, na mesma coluna. O
+mínimo vale para os dois.
 """
 
 import pytest
@@ -129,6 +134,129 @@ class TestCriacaoAceitaOMinimo:
         criado = sessao.query(Chamado).filter(Chamado.id != dados["chamado_id"]).one()
         assert criado.titulo == TITULO_OK
         assert criado.descricao == DESCRICAO_OK
+
+
+class TestEdicaoRecusaTextoCurto:
+    """
+    PUT /chamados/{id} — restrito a administrador ou técnico, então os testes
+    autenticam como técnico.
+    """
+
+    @pytest.mark.parametrize(
+        "campo,valor",
+        [
+            ("titulo", "a" * 9),
+            ("descricao", "a" * 19),
+            ("solucao", "a" * 9),
+            ("titulo", "   " + "a" * 9 + "   "),
+            ("solucao", "         "),
+        ],
+    )
+    def test_texto_curto_e_422(self, cliente, dados, sessao, autenticar, campo, valor):
+        resposta = cliente.put(
+            f"/api/v1/chamados/{dados['chamado_id']}",
+            json={campo: valor},
+            headers=autenticar(dados["tecnico_id"], "tecnico.teste", "Tecnico"),
+        )
+
+        assert recusou_por_tamanho(resposta, campo), resposta.text
+
+    def test_motivo_de_cancelamento_curto_e_422(self, cliente, dados, autenticar):
+        """
+        O motivo do cancelamento é gravado em `solucao` (o PATCH /cancelar não
+        tem corpo), então cai no mesmo mínimo. Sem isso, cancelar com "x"
+        passaria por uma porta que resolver com "x" não passa.
+        """
+        resposta = cliente.put(
+            f"/api/v1/chamados/{dados['chamado_id']}",
+            json={"solucao": "x"},
+            headers=autenticar(dados["tecnico_id"], "tecnico.teste", "Tecnico"),
+        )
+
+        assert recusou_por_tamanho(resposta, "solucao"), resposta.text
+
+    def test_solucao_valida_e_gravada_sem_espaco_nas_pontas(
+        self, cliente, dados, sessao, autenticar
+    ):
+        resposta = cliente.put(
+            f"/api/v1/chamados/{dados['chamado_id']}",
+            json={"solucao": "  Troquei a fonte do equipamento  "},
+            headers=autenticar(dados["tecnico_id"], "tecnico.teste", "Tecnico"),
+        )
+
+        assert resposta.status_code == 200
+        assert sessao.query(Chamado).one().solucao == "Troquei a fonte do equipamento"
+
+
+class TestLegadoContinuaEditavel:
+    """
+    A promessa que sustentou a decisão de exigir o mínimo também no update.
+
+    Um chamado antigo de título curto continua editável, porque o que não vem
+    na requisição não é validado. Se algum dia o schema passar a exigir os
+    campos em vez de aceitá-los como opcionais, ou se o handler deixar de usar
+    `exclude_unset`, estes testes caem — e o sintoma em produção seria a
+    equipe não conseguir mexer no status de chamado antigo.
+    """
+
+    @pytest.fixture
+    def chamado_legado(self, sessao, dados):
+        legado = Chamado(
+            id=102,
+            protocolo="CH-LEGADO-102",
+            solicitante_id=dados["comum_id"],
+            categoria_id=1,
+            titulo="sem net",       # 7, abaixo do mínimo de hoje
+            descricao="nao liga",   # 8, idem
+            solucao="reiniciei",    # 9, idem
+            status="Aberto",
+            prioridade="Média",
+        )
+        sessao.add(legado)
+        sessao.commit()
+        return legado.id
+
+    def test_mudar_so_o_status_funciona(
+        self, cliente, dados, sessao, autenticar, chamado_legado
+    ):
+        resposta = cliente.put(
+            f"/api/v1/chamados/{chamado_legado}",
+            json={"status": "Em Andamento"},
+            headers=autenticar(dados["tecnico_id"], "tecnico.teste", "Tecnico"),
+        )
+
+        assert resposta.status_code == 200, resposta.text
+        assert sessao.query(Chamado).filter(Chamado.id == chamado_legado).one().status == "Em Andamento"
+
+    def test_atribuir_tecnico_funciona(
+        self, cliente, dados, autenticar, chamado_legado
+    ):
+        resposta = cliente.put(
+            f"/api/v1/chamados/{chamado_legado}",
+            json={"tecnico_responsavel_id": dados["tecnico_id"]},
+            headers=autenticar(dados["tecnico_id"], "tecnico.teste", "Tecnico"),
+        )
+
+        assert resposta.status_code == 200, resposta.text
+
+    def test_reenviar_o_titulo_legado_intocado_e_que_seria_recusado(
+        self, cliente, dados, autenticar, chamado_legado
+    ):
+        """
+        O outro lado da promessa, registrado de propósito.
+
+        Se o frontend voltar a mandar o objeto inteiro no PUT, este 422 é o
+        que a equipe veria ao editar chamado antigo. O teste existe para que a
+        causa esteja escrita quando isso acontecer, em vez de virar
+        investigação.
+        """
+        resposta = cliente.put(
+            f"/api/v1/chamados/{chamado_legado}",
+            json={"status": "Em Andamento", "titulo": "sem net"},
+            headers=autenticar(dados["tecnico_id"], "tecnico.teste", "Tecnico"),
+        )
+
+        assert recusou_por_tamanho(resposta, "titulo"), resposta.text
 
 
 class TestLegadoContinuaLegivel:

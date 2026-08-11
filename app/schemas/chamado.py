@@ -17,6 +17,13 @@ from app.schemas.sla import SLAInfo
 TituloChamado = Annotated[str, StringConstraints(strip_whitespace=True, min_length=10)]
 DescricaoChamado = Annotated[str, StringConstraints(strip_whitespace=True, min_length=20)]
 
+# `solucao` guarda duas coisas: o texto da solução e o motivo do cancelamento
+# — o `PATCH /cancelar` não tem corpo, então o motivo chega por `PUT {solucao}`
+# e cai na mesma coluna. O mínimo aqui vale para os dois, e é isso que se
+# quer: cancelar com "x" não pode passar por uma porta que resolver com "x"
+# não passa.
+SolucaoChamado = Annotated[str, StringConstraints(strip_whitespace=True, min_length=10)]
+
 
 class PrioridadeEnum(str, Enum):
     BAIXA = "Baixa"
@@ -69,14 +76,27 @@ class ChamadoCreate(ChamadoBase):
 
 
 class ChamadoUpdate(BaseModel):
-    titulo: Optional[str] = None
-    descricao: Optional[str] = None
+    """
+    Edição de chamado. Restrito a administrador ou técnico.
+
+    O mínimo dos três campos de texto vale aqui, e não trava registro legado,
+    porque o frontend não reenvia valor intocado: `titulo` e `descricao` ele
+    nunca manda (editar descrição não existe na interface), e `solucao` só vai
+    quando muda. Um chamado antigo de título curto continua editável — mexer
+    no status não carrega o título junto.
+
+    A validação só roda no campo que vem na requisição: o que não é enviado
+    não é validado, e o handler grava com `exclude_unset=True`.
+    """
+
+    titulo: Optional[TituloChamado] = None
+    descricao: Optional[DescricaoChamado] = None
     categoria_id: Optional[int] = None
     prioridade: Optional[PrioridadeEnum] = None
     urgencia: Optional[UrgenciaEnum] = None
     status: Optional[StatusEnum] = None
     tecnico_responsavel_id: Optional[int] = None
-    solucao: Optional[str] = None
+    solucao: Optional[SolucaoChamado] = None
     observacoes: Optional[str] = None
     avaliacao: Optional[int] = Field(None, ge=1, le=5)
 
