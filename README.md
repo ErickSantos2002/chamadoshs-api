@@ -86,8 +86,8 @@ cd ChamadosHS
 # Criar banco de dados
 createdb chamados_db
 
-# Executar schema
-psql chamados_db < database/schema_chamados.sql
+# Executar schema (completo e atual; num banco novo não rode migrations/)
+psql chamados_db < schema_chamados.sql
 ```
 
 ### 3. Configurar Backend

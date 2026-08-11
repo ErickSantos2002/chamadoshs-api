@@ -25,6 +25,15 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   A validação só roda quando `tecnico_responsavel_id` vem na requisição: olhar o
   técnico já gravado tornaria ineditável um chamado cuja pessoa atribuída
   virasse conta de serviço depois.
+- **Trava de divergência entre o `.sql` e os models**
+  (`tests/test_schema_sql_bate_com_os_models.py`). Lê o `schema_chamados.sql` e
+  compara tabelas e colunas com `Base.metadata`, nos dois sentidos. Coluna nova
+  em `app/models/` sem a coluna no arquivo derruba a suíte. É o que impede o
+  arquivo de envelhecer de novo: sem isso, a correção acima valeria até a
+  próxima migration. Lê o SQL em vez de executá-lo porque o arquivo é
+  PostgreSQL (SERIAL, plpgsql, índice parcial) e a suíte não depende de banco
+  externo. Não compara tipo, `nullable` nem `default` — isso exigiria
+  interpretar dialeto e passaria a falhar por diferença de escrita.
 - Estrutura de testes com pytest, em `requirements-dev.txt` separado do de
   produção — o Dockerfile instala apenas o de produção, então nada de teste
   vai para a imagem publicada.
@@ -67,6 +76,22 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   Sem migration: a coluna `chamados.avaliacao` já existe, com
   `CHECK (avaliacao >= 1 AND avaliacao <= 5)`, espelhado no schema Pydantic
   para nota fora da faixa dar 422 em vez de 500.
+
+- **`schema_chamados.sql` voltou a descrever o banco.** O arquivo estava parado
+  na 1.0 (`07e606c`) enquanto seis entregas mexiam no schema. Faltavam três
+  tabelas (`sla_configs`, `tarefas_recorrentes`,
+  `tarefas_recorrentes_execucoes`) e cinco colunas (`usuarios.senha_hash`,
+  `usuarios.conta_de_servico`, `chamados.urgencia`, `chamados.cancelado`,
+  `chamados.arquivado`). Rodá-lo criava um banco **sem `senha_hash`**, isto é,
+  um banco em que ninguém autentica — e ele é justamente o arquivo que se abre
+  numa recuperação de desastre ou ao montar homologação. Agora está completo,
+  atual e idempotente, incluindo os 16 índices, os 3 triggers e o seed.
+
+  **Muda o procedimento:** banco novo roda **só** `schema_chamados.sql` e
+  **não** roda `migrations/`; banco existente roda **só** o que falta de
+  `migrations/`. Misturar falha, porque parte das migrations não é idempotente
+  (`add_auth_fields.sql` faz `ADD COLUMN` sem `IF NOT EXISTS`). DEPLOY.md e
+  README atualizados.
 
 ### Segurança
 - **Header de autenticação no webhook do n8n.** Até aqui a URL era a única

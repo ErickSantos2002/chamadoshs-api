@@ -19,11 +19,18 @@ arquivos `.sql` **aplicados à mão** contra o banco:
 migrations/add_auth_fields.sql
 migrations/add_sla_configs.sql
 migrations/add_tarefas_recorrentes.sql
+migrations/2026-08-10-add-conta-de-servico.sql
 add_urgencia_field.sql              (raiz)
 add_cancelado_arquivado_fields.sql  (raiz)
-schema_chamados.sql                 (schema base)
+schema_chamados.sql                 (schema COMPLETO e atual — banco novo)
 criar_usuario_inicial.sql
 ```
+
+**Banco novo roda só `schema_chamados.sql`; banco existente roda só o que falta
+de `migrations/`.** Misturar falha: o schema já contém tudo, e parte das
+migrations não é idempotente. Desde 11/08/2026 o `schema_chamados.sql` está
+completo, e `tests/test_schema_sql_bate_com_os_models.py` falha se ele divergir
+dos models — toda coluna nova em `app/models/` precisa entrar lá também.
 
 Consequências que mandam nesta skill:
 

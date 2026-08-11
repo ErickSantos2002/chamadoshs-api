@@ -26,6 +26,32 @@ migração** também é seguro — a API antiga simplesmente ignora a tabela nov
 a API nova (resiliente à tabela ausente) não quebra se a migração for
 revertida depois.
 
+## Banco novo x banco existente
+
+São dois caminhos, e **misturar os dois falha**:
+
+| Situação | O que rodar |
+|---|---|
+| Banco **novo** (recuperação de desastre, homologação, dev) | Só `schema_chamados.sql`. **Não** rode `migrations/`. |
+| Banco **existente** | Só o que ainda falta de `migrations/`. **Não** rode `schema_chamados.sql`. |
+
+`schema_chamados.sql` é o schema completo e atual — desde 11/08/2026 ele
+inclui tudo o que as migrations foram acrescentando desde a 1.0. Rodar as
+migrations depois dele **dá erro**, porque parte delas não é idempotente
+(`add_auth_fields.sql` faz `ADD COLUMN` sem `IF NOT EXISTS`). Elas continuam
+existindo para os bancos criados antes de cada entrega, e é só para isso que
+servem.
+
+Antes dessa mudança o arquivo estava parado na 1.0: criava um banco sem
+`usuarios.senha_hash`, em que ninguém consegue autenticar. `tests/
+test_schema_sql_bate_com_os_models.py` compara o arquivo com os models e falha
+se voltarem a divergir.
+
+**Nota sobre a ordem das migrations:** duas delas estão na raiz do repositório,
+não em `migrations/` — `add_urgencia_field.sql` e
+`add_cancelado_arquivado_fields.sql`. Num banco existente que ainda não as
+recebeu, elas também precisam ser aplicadas.
+
 ## Pré-requisitos
 
 1. Conta no Easypanel configurada
@@ -59,11 +85,8 @@ revertida depois.
    - Copie o conteúdo do arquivo `schema_chamados.sql`
    - Cole no console SQL e execute
 
-7. Execute as migrações pendentes da pasta `migrations/` (na ordem em que foram
-   adicionadas — hoje: `add_auth_fields.sql`, `add_sla_configs.sql`):
-   - Copie o conteúdo de cada arquivo `migrations/*.sql`
-   - Cole no console SQL e execute, **antes** de subir a nova versão da API
-     (ver "Ordem obrigatória de deploy" no topo deste documento)
+   É só isso. Este banco é novo, então **não** rode nada de `migrations/` —
+   o schema já vem completo (ver "Banco novo x banco existente" no topo).
 
 ### 3. Adicionar Aplicação FastAPI
 
