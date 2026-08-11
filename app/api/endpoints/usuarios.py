@@ -10,6 +10,37 @@ from app.core.security import gerar_hash_senha
 router = APIRouter()
 
 
+def _garantir_desativacao_segura(db: Session, usuario: Usuario, admin: Usuario) -> None:
+    """
+    Recusa as duas desativações que deixariam o sistema sem quem administrar:
+    a de si mesmo e a do último administrador ativo. Como criar e editar
+    usuário também exigem administrador, não haveria recuperação pela
+    aplicação — só por SQL direto no banco.
+
+    Vale para os dois caminhos que desativam. Enquanto a checagem morava só no
+    DELETE, um PUT {"ativo": false} passava por cima dela e derrubava o último
+    administrador — a porta ao lado da que o DELETE trancava.
+    """
+    if usuario.id == admin.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível desativar o próprio usuário",
+        )
+
+    if usuario.ativo and _normalizar_role(usuario.role.nome if usuario.role else None) == _normalizar_role(ROLE_ADMIN):
+        admins_ativos = (
+            db.query(Usuario)
+            .join(Usuario.role)
+            .filter(Usuario.ativo.is_(True), Usuario.role_id == usuario.role_id)
+            .count()
+        )
+        if admins_ativos <= 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Não é possível desativar o último administrador ativo",
+            )
+
+
 @router.get("/", response_model=List[UsuarioResponse])
 def listar_usuarios(
     skip: int = 0,
@@ -81,7 +112,7 @@ def criar_usuario(
 def atualizar_usuario(
     usuario_id: int,
     usuario_data: UsuarioUpdate,
-    _admin: Usuario = Depends(require_admin),
+    admin: Usuario = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -100,6 +131,12 @@ def atualizar_usuario(
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
     update_data = usuario_data.model_dump(exclude_unset=True)
+
+    # Só quando `ativo` chega como false. Reativar é hoje o único caminho de
+    # volta pela interface — aplicar as travas a qualquer mudança de `ativo`
+    # bloquearia justamente a recuperação, em vez do dano.
+    if update_data.get("ativo") is False:
+        _garantir_desativacao_segura(db, usuario, admin)
 
     # Se está atualizando a senha, gera o hash
     if 'senha' in update_data:
@@ -123,33 +160,14 @@ def deletar_usuario(
     """
     Desativa um usuário (soft delete). Restrito a administrador.
 
-    Bloqueia dois casos que deixariam o sistema sem quem administrar:
-    desativar a si mesmo e desativar o último administrador ativo. Como
-    criar e editar usuário também exigem administrador, não haveria
-    recuperação pela aplicação — só por SQL direto no banco.
+    As travas ficam em `_garantir_desativacao_segura`, compartilhadas com o
+    PUT: era a duplicação que permitia as duas rotas divergirem.
     """
     usuario = db.query(Usuario).filter(Usuario.id == usuario_id).first()
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuário não encontrado")
 
-    if usuario.id == admin.id:
-        raise HTTPException(
-            status_code=400,
-            detail="Não é possível desativar o próprio usuário",
-        )
-
-    if usuario.ativo and _normalizar_role(usuario.role.nome if usuario.role else None) == _normalizar_role(ROLE_ADMIN):
-        admins_ativos = (
-            db.query(Usuario)
-            .join(Usuario.role)
-            .filter(Usuario.ativo.is_(True), Usuario.role_id == usuario.role_id)
-            .count()
-        )
-        if admins_ativos <= 1:
-            raise HTTPException(
-                status_code=400,
-                detail="Não é possível desativar o último administrador ativo",
-            )
+    _garantir_desativacao_segura(db, usuario, admin)
 
     usuario.ativo = False
     db.commit()

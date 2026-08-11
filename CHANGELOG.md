@@ -123,6 +123,24 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   README atualizados.
 
 ### Segurança
+- **`PUT /api/v1/usuarios/{id}` passou a respeitar as travas de desativação.**
+  O `DELETE` recusava desativar a si mesmo e desativar o último administrador
+  ativo; o `PUT` aceita `ativo` e não tinha nenhuma das duas, então
+  `PUT {"ativo": false}` derrubava o administrador pela porta ao lado da que o
+  `DELETE` trancava — e sem nenhum administrador não há recuperação pela
+  aplicação, porque criar e editar usuário também exigem esse perfil. As travas
+  ficam agora em `_garantir_desativacao_segura`, compartilhada pelas duas rotas:
+  a duplicação era o que permitia divergirem.
+
+  **Só valem quando `ativo` chega como `false`.** Reativar
+  (`PUT {"ativo": true}`) é o único caminho de volta pela interface; travar
+  qualquer mudança de `ativo` bloquearia a recuperação em vez do dano. Há teste
+  para os dois lados em `tests/test_desativacao_de_usuario.py`.
+
+  Alcance antes da correção: era preciso token de administrador e chamada
+  direta à API — o frontend não tem campo `ativo` no cadastro e nunca envia
+  `false`. Ou seja, o mesmo conjunto de pessoas que já podia desativar pelo
+  caminho legítimo. Não houve exploração conhecida.
 - **Header de autenticação no webhook do n8n.** Até aqui a URL era a única
   credencial: quem conhecesse o endereço disparava o fluxo. O backend passa a
   enviar `WEBHOOK_TECNICO_TOKEN` no header `X-Webhook-Token`, para o nó
