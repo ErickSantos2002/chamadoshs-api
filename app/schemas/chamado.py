@@ -1,9 +1,21 @@
-from pydantic import BaseModel, ConfigDict, Field
-from typing import Optional
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from typing import Annotated, Optional
 from datetime import datetime
 from enum import Enum
 
 from app.schemas.sla import SLAInfo
+
+# Tamanhos mínimos dos campos de texto do chamado, iguais aos que o frontend
+# exige desde 11/08/2026.
+#
+# `strip_whitespace=True` é o que faz a regra valer: o Pydantic apara antes de
+# medir, então uma barra de espaço repetida não satisfaz o mínimo — e o valor
+# gravado no banco vai sem os espaços das pontas, em vez de guardar o que o
+# formulário mandou.
+#
+# Estes tipos NÃO entram em `ChamadoBase`. Ver o comentário lá.
+TituloChamado = Annotated[str, StringConstraints(strip_whitespace=True, min_length=10)]
+DescricaoChamado = Annotated[str, StringConstraints(strip_whitespace=True, min_length=20)]
 
 
 class PrioridadeEnum(str, Enum):
@@ -29,6 +41,19 @@ class StatusEnum(str, Enum):
 
 
 class ChamadoBase(BaseModel):
+    """
+    Campos comuns de entrada e de saída.
+
+    `titulo` e `descricao` ficam SEM tamanho mínimo aqui de propósito, mesmo
+    sendo esse o lugar óbvio: `ChamadoResponse` herda desta classe, e o
+    FastAPI valida a resposta contra ela. Um mínimo aqui faria todo chamado
+    antigo com título curto — que existe, porque a API aceitou qualquer coisa
+    até 11/08/2026 — estourar `ResponseValidationError` no `GET`. A regra
+    entraria para melhorar o cadastro e derrubaria a leitura do histórico.
+
+    O mínimo mora em `ChamadoCreate`, que é entrada pura.
+    """
+
     titulo: str
     descricao: str
     categoria_id: Optional[int] = None
@@ -36,6 +61,10 @@ class ChamadoBase(BaseModel):
 
 
 class ChamadoCreate(ChamadoBase):
+    """Chamado novo: aqui o mínimo vale, porque não há legado para respeitar."""
+
+    titulo: TituloChamado
+    descricao: DescricaoChamado
     solicitante_id: int
 
 

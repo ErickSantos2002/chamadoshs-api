@@ -25,6 +25,21 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   A validação só roda quando `tecnico_responsavel_id` vem na requisição: olhar o
   técnico já gravado tornaria ineditável um chamado cuja pessoa atribuída
   virasse conta de serviço depois.
+- **Tamanho mínimo de `titulo` (10) e `descricao` (20) na criação de chamado**,
+  igualando a API ao que o frontend passou a exigir. A contagem é sobre o texto
+  aparado, senão a barra de espaço satisfaz o mínimo; o valor também é gravado
+  sem os espaços das pontas.
+
+  Vale **só no `POST`**. A restrição fica em `ChamadoCreate`, e não em
+  `ChamadoBase`, porque `ChamadoResponse` herda da base e o FastAPI valida a
+  resposta contra ela: o mínimo na base faria todo chamado antigo de título
+  curto — que existe, porque a API aceitou qualquer tamanho até aqui — virar
+  `ResponseValidationError`, ou seja, **500 no GET e na listagem**. Há teste
+  cobrindo isso.
+
+  Ainda **não** vale no `PUT`, nem para `solucao` (campo só de update):
+  depende de contar quantos chamados em produção ficariam abaixo do mínimo,
+  porque exigir na edição travaria registro legado.
 - **Trava de divergência entre o `.sql` e os models**
   (`tests/test_schema_sql_bate_com_os_models.py`). Lê o `schema_chamados.sql` e
   compara tabelas e colunas com `Base.metadata`, nos dois sentidos. Coluna nova
