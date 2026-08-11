@@ -141,6 +141,22 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   direta à API — o frontend não tem campo `ativo` no cadastro e nunca envia
   `false`. Ou seja, o mesmo conjunto de pessoas que já podia desativar pelo
   caminho legítimo. Não houve exploração conhecida.
+- **`PUT /api/v1/usuarios/{id}` recusa rebaixar o último administrador ativo.**
+  Tirar o perfil de administrador deixa o sistema no mesmo estado que
+  desativar a conta, mas a recuperação é pior: quem se rebaixa perde o acesso
+  à tela de Cadastros, exclusiva de administrador, e some da própria condição
+  de consertar — o desativado ao menos continua listado para outro
+  administrador reativar. Sendo o último, ninguém conserta pela aplicação.
+
+  Diferente da desativação, **este caminho era alcançável pela interface**: o
+  modal de usuário envia o perfil em toda gravação, então trocar o próprio
+  para "Usuario" e salvar eram três cliques, sem token nem chamada direta.
+
+  A regra é sobre o último, e não sobre si mesmo: rebaixar a própria conta é
+  legítimo quando há outro administrador ativo, e é o que se faz ao sair da
+  equipe. Reenviar o mesmo perfil também passa — é o que o modal faz em toda
+  gravação, e travar a presença do campo em vez da mudança de valor tornaria o
+  último administrador ineditável.
 - **Header de autenticação no webhook do n8n.** Até aqui a URL era a única
   credencial: quem conhecesse o endereço disparava o fluxo. O backend passa a
   enviar `WEBHOOK_TECNICO_TOKEN` no header `X-Webhook-Token`, para o nó

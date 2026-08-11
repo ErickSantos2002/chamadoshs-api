@@ -3,11 +3,24 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from app.api.deps import get_db, require_admin, ROLE_ADMIN, _normalizar_role
+from app.models.role import Role
 from app.models.usuario import Usuario
 from app.schemas.usuario import UsuarioCreate, UsuarioUpdate, UsuarioResponse
 from app.core.security import gerar_hash_senha
 
 router = APIRouter()
+
+
+def _e_administrador(role: Role) -> bool:
+    return _normalizar_role(role.nome if role else None) == _normalizar_role(ROLE_ADMIN)
+
+
+def _admins_ativos(db: Session, role_id: int) -> int:
+    return (
+        db.query(Usuario)
+        .filter(Usuario.ativo.is_(True), Usuario.role_id == role_id)
+        .count()
+    )
 
 
 def _garantir_desativacao_segura(db: Session, usuario: Usuario, admin: Usuario) -> None:
@@ -27,18 +40,49 @@ def _garantir_desativacao_segura(db: Session, usuario: Usuario, admin: Usuario) 
             detail="Não é possível desativar o próprio usuário",
         )
 
-    if usuario.ativo and _normalizar_role(usuario.role.nome if usuario.role else None) == _normalizar_role(ROLE_ADMIN):
-        admins_ativos = (
-            db.query(Usuario)
-            .join(Usuario.role)
-            .filter(Usuario.ativo.is_(True), Usuario.role_id == usuario.role_id)
-            .count()
-        )
-        if admins_ativos <= 1:
+    if usuario.ativo and _e_administrador(usuario.role):
+        if _admins_ativos(db, usuario.role_id) <= 1:
             raise HTTPException(
                 status_code=400,
                 detail="Não é possível desativar o último administrador ativo",
             )
+
+
+def _garantir_rebaixamento_seguro(db: Session, usuario: Usuario, novo_role_id: int) -> None:
+    """
+    Recusa tirar o perfil de administrador do último administrador ativo.
+
+    Deixa o sistema no mesmo estado que a desativação — sem ninguém para
+    administrar — mas a recuperação é pior: quem se rebaixa perde o acesso à
+    tela de Cadastros, que é exclusiva de administrador, e some da própria
+    condição de consertar. O desativado ao menos continua listado para outro
+    administrador reativar.
+
+    E o caminho é de tela, não de API: o modal de usuário envia o perfil em
+    toda gravação, então trocar o próprio para "Usuario" e salvar são três
+    cliques.
+
+    A regra é sobre o último, não sobre si mesmo: quem sai da equipe rebaixa a
+    própria conta, e isso é legítimo enquanto houver outro administrador ativo.
+    Reenviar o mesmo perfil também passa — é o que o modal faz em toda
+    gravação, inclusive quando só se mexeu no setor.
+    """
+    if not usuario.ativo or not _e_administrador(usuario.role):
+        return
+
+    if novo_role_id == usuario.role_id:
+        return
+
+    # Perfil inexistente cai aqui como "não é administrador", que é a leitura
+    # segura: o INSERT falha adiante na FK de qualquer forma.
+    if _e_administrador(db.query(Role).filter(Role.id == novo_role_id).first()):
+        return
+
+    if _admins_ativos(db, usuario.role_id) <= 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível rebaixar o último administrador ativo",
+        )
 
 
 @router.get("/", response_model=List[UsuarioResponse])
@@ -137,6 +181,9 @@ def atualizar_usuario(
     # bloquearia justamente a recuperação, em vez do dano.
     if update_data.get("ativo") is False:
         _garantir_desativacao_segura(db, usuario, admin)
+
+    if update_data.get("role_id") is not None:
+        _garantir_rebaixamento_seguro(db, usuario, update_data["role_id"])
 
     # Se está atualizando a senha, gera o hash
     if 'senha' in update_data:

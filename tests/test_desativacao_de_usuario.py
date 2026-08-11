@@ -1,5 +1,8 @@
 """
-Testes das travas de desativação de usuário.
+Testes das travas que impedem o sistema de ficar sem administrador.
+
+São duas famílias, pelos dois caminhos que produzem o mesmo estado final:
+desativar a conta e tirar dela o perfil de administrador.
 
 O DELETE sempre recusou desativar a si mesmo e desativar o último
 administrador ativo — sem isso o sistema fica sem quem administrar, e como
@@ -13,6 +16,16 @@ trancava. As travas agora são compartilhadas.
 A outra metade importa tanto quanto: elas valem só na desativação. Reativar é
 `PUT {"ativo": true}`, e é o único caminho de volta pela interface — travar
 qualquer mudança de `ativo` bloquearia a recuperação em vez do dano.
+
+O rebaixamento é o mesmo dano por outra porta, e mais alcançável: o modal de
+usuário envia o perfil em toda gravação, então o administrador trocar o
+próprio para "Usuario" e salvar são três cliques na tela. A recuperação é pior
+que a da desativação — quem se rebaixa perde a tela de Cadastros, exclusiva de
+administrador, e some da própria condição de consertar.
+
+A regra ali é "não rebaixar o último administrador ativo", e não "não rebaixar
+a si mesmo": quem sai da equipe rebaixa a própria conta, e isso é legítimo
+enquanto houver outro administrador.
 """
 
 from app.models import Usuario
@@ -153,6 +166,108 @@ class TestReativarNaoEAfetado:
         )
 
         assert resposta.status_code == 200
+
+
+class TestRebaixamentoDeAdministrador:
+    """
+    O mesmo dano da desativação, pela porta do `role_id` — e esta é alcançável
+    pela interface, não só por chamada direta à API.
+    """
+
+    def test_ultimo_admin_nao_rebaixa_a_si_mesmo(self, cliente, dados, sessao, autenticar):
+        resposta = cliente.put(
+            f"/api/v1/usuarios/{dados['admin_id']}",
+            json={"role_id": 3},
+            headers=_como_admin(autenticar, dados),
+        )
+
+        assert resposta.status_code == 400
+        assert "último administrador" in resposta.json()["detail"]
+
+        sessao.expire_all()
+        assert sessao.query(Usuario).filter(Usuario.id == dados["admin_id"]).one().role_id == 1
+
+    def test_admin_inativo_nao_conta_como_sucessor(self, cliente, dados, sessao, autenticar):
+        """
+        Existir outro administrador no banco não basta: se ele está desativado,
+        não consegue nem autenticar, então quem se rebaixa continua sendo o
+        último com acesso.
+        """
+        _segundo_admin(sessao, ativo=False)
+
+        resposta = cliente.put(
+            f"/api/v1/usuarios/{dados['admin_id']}",
+            json={"role_id": 3},
+            headers=_como_admin(autenticar, dados),
+        )
+
+        assert resposta.status_code == 400
+        assert "último administrador" in resposta.json()["detail"]
+
+    def test_rebaixar_a_si_mesmo_e_legitimo_com_outro_admin(
+        self, cliente, dados, sessao, autenticar
+    ):
+        """O caso de quem sai da equipe. A regra é sobre o último, não sobre si."""
+        _segundo_admin(sessao)
+
+        resposta = cliente.put(
+            f"/api/v1/usuarios/{dados['admin_id']}",
+            json={"role_id": 3},
+            headers=_como_admin(autenticar, dados),
+        )
+
+        assert resposta.status_code == 200
+        assert resposta.json()["role_id"] == 3
+
+    def test_rebaixar_outro_admin_com_dois_ativos(self, cliente, dados, sessao, autenticar):
+        outro_id = _segundo_admin(sessao)
+
+        resposta = cliente.put(
+            f"/api/v1/usuarios/{outro_id}",
+            json={"role_id": 2},
+            headers=_como_admin(autenticar, dados),
+        )
+
+        assert resposta.status_code == 200
+        assert resposta.json()["role_id"] == 2
+
+    def test_rebaixar_admin_ja_inativo(self, cliente, dados, sessao, autenticar):
+        """Não reduz o número de administradores ativos — não há o que travar."""
+        outro_id = _segundo_admin(sessao, ativo=False)
+
+        resposta = cliente.put(
+            f"/api/v1/usuarios/{outro_id}",
+            json={"role_id": 3},
+            headers=_como_admin(autenticar, dados),
+        )
+
+        assert resposta.status_code == 200
+
+    def test_reenviar_o_mesmo_perfil_do_ultimo_admin_passa(self, cliente, dados, autenticar):
+        """
+        O não-regride que importa para a tela: o modal envia o perfil em toda
+        gravação, então salvar qualquer edição do último administrador manda
+        `role_id` junto. Travar a presença do campo, em vez da mudança de
+        valor, tornaria o último administrador ineditável.
+        """
+        resposta = cliente.put(
+            f"/api/v1/usuarios/{dados['admin_id']}",
+            json={"role_id": 1, "setor_id": 1},
+            headers=_como_admin(autenticar, dados),
+        )
+
+        assert resposta.status_code == 200
+        assert resposta.json()["role_id"] == 1
+
+    def test_promover_usuario_comum_continua_liberado(self, cliente, dados, autenticar):
+        resposta = cliente.put(
+            f"/api/v1/usuarios/{dados['comum_id']}",
+            json={"role_id": 1},
+            headers=_como_admin(autenticar, dados),
+        )
+
+        assert resposta.status_code == 200
+        assert resposta.json()["role_id"] == 1
 
 
 class TestDeleteContinuaIgual:
