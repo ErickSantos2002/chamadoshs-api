@@ -52,6 +52,22 @@ class ChamadoUpdate(BaseModel):
     avaliacao: Optional[int] = Field(None, ge=1, le=5)
 
 
+class ChamadoAvaliacao(BaseModel):
+    """
+    Corpo do PATCH /chamados/{id}/avaliar.
+
+    Schema próprio, e não `ChamadoUpdate`, porque este é o único corpo que o
+    solicitante comum pode enviar: qualquer campo aqui é campo que ele passa a
+    poder escrever. Manter só `avaliacao` é o que impede a rota de virar um
+    caminho alternativo para mexer em status, prioridade ou técnico.
+
+    `ge`/`le` espelham o CHECK da coluna — sem eles um 0 ou 6 só falharia no
+    commit, virando 500 em vez de 422.
+    """
+
+    avaliacao: int = Field(..., ge=1, le=5)
+
+
 class ChamadoResponse(ChamadoBase):
     id: int
     protocolo: str

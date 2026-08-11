@@ -18,7 +18,13 @@ from app.models.chamado import Chamado
 from app.models.usuario import Usuario
 from app.models.historico import HistoricoChamado
 from app.models.sla_config import SLAConfig
-from app.schemas.chamado import ChamadoCreate, ChamadoUpdate, ChamadoResponse
+from app.schemas.chamado import (
+    ChamadoAvaliacao,
+    ChamadoCreate,
+    ChamadoResponse,
+    ChamadoUpdate,
+    StatusEnum,
+)
 from app.services.chamado_service import gerar_protocolo, registrar_historico, calcular_tempo_resolucao
 from app.services.sla_service import calcular_sla
 from app.services.webhook_service import enviar_webhook_tecnico
@@ -317,6 +323,68 @@ def atualizar_chamado(
             tecnico_id=chamado_data.tecnico_responsavel_id,
             acao="atribuido"
         )
+
+    return _anexar_sla([chamado], db)[0]
+
+
+# Status em que o atendimento já terminou e faz sentido avaliar.
+STATUS_AVALIAVEIS = (StatusEnum.RESOLVIDO.value, StatusEnum.FECHADO.value)
+
+
+@router.patch("/{chamado_id}/avaliar", response_model=ChamadoResponse)
+def avaliar_chamado(
+    chamado_id: int,
+    avaliacao_data: ChamadoAvaliacao,
+    current_user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Registra a avaliação do atendimento pelo solicitante.
+
+    Existe como rota própria porque o PUT /{id} é `require_staff` e vai
+    continuar sendo: por ele o solicitante conseguiria alterar status,
+    prioridade e técnico responsável do próprio chamado. Aqui o único campo
+    gravável é `avaliacao`.
+
+    Só o solicitante avalia. Administrador e técnico não avaliam no lugar
+    dele — a nota mede o atendimento que a equipe prestou, então deixar a
+    própria equipe preenchê-la esvaziaria o indicador. Por isso a checagem é
+    `solicitante_id != current_user.id` puro, sem escape por perfil.
+    """
+    chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
+    if not chamado:
+        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+
+    if chamado.solicitante_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Só o solicitante pode avaliar o próprio chamado",
+        )
+
+    if chamado.status not in STATUS_AVALIAVEIS:
+        # 409 e não 400: o corpo está correto, o que impede é o estado atual
+        # do chamado — resolver o chamado torna a mesma requisição válida.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="O chamado só pode ser avaliado quando estiver resolvido ou fechado",
+        )
+
+    avaliacao_anterior = chamado.avaliacao
+    chamado.avaliacao = avaliacao_data.avaliacao
+    db.commit()
+    db.refresh(chamado)
+
+    registrar_historico(
+        db=db,
+        chamado_id=chamado.id,
+        usuario_id=current_user.id,
+        acao="Avaliação do atendimento",
+        descricao=(
+            f"Avaliação alterada de {avaliacao_anterior} para {chamado.avaliacao}"
+            if avaliacao_anterior is not None
+            else f"Chamado avaliado com nota {chamado.avaliacao}"
+        ),
+    )
 
     return _anexar_sla([chamado], db)[0]
 

@@ -47,6 +47,27 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   Agora o aviso dispara sempre que o parâmetro chega, nos seis pontos. O
   volume sobe enquanto o frontend não for atualizado: é o baseline esperado.
 
+### Corrigido
+- **O solicitante voltou a conseguir avaliar o atendimento.** Desde a 1.1.0 o
+  widget de estrelas salvava por `PUT /api/v1/chamados/{id}`, que passou a
+  exigir perfil de administrador ou técnico — o solicitante, única pessoa que
+  deveria avaliar, levava 403. Corrigido com rota dedicada
+  **`PATCH /api/v1/chamados/{id}/avaliar`**, corpo `{"avaliacao": 1..5}`,
+  aberta a qualquer usuário autenticado e restrita ao próprio solicitante do
+  chamado (403 para os demais, inclusive administrador e técnico), permitida
+  só com o chamado `Resolvido` ou `Fechado` (409 caso contrário). A avaliação
+  fica registrada no histórico do chamado.
+
+  O `require_staff` do PUT **não** foi afrouxado, de propósito: por aquela rota
+  o solicitante alteraria status, prioridade e técnico responsável do próprio
+  chamado. A rota nova grava um campo só, e 17 testes cobrem tanto o caminho
+  do solicitante quanto o escopo — que ela não virou porta lateral para o que
+  o PUT protege.
+
+  Sem migration: a coluna `chamados.avaliacao` já existe, com
+  `CHECK (avaliacao >= 1 AND avaliacao <= 5)`, espelhado no schema Pydantic
+  para nota fora da faixa dar 422 em vez de 500.
+
 ### Segurança
 - **Header de autenticação no webhook do n8n.** Até aqui a URL era a única
   credencial: quem conhecesse o endereço disparava o fluxo. O backend passa a
@@ -83,6 +104,9 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   (`ADD COLUMN IF NOT EXISTS`); sem reversão automática — o rollback é o backup.
   Marcar as contas de serviço é um `UPDATE` separado, comentado no fim do
   arquivo, para ser rodado depois de conferir os nomes.
+- **`PATCH /chamados/{id}/avaliar`**: subir a API **antes** de ligar o widget
+  de estrelas no frontend. Rota nova, sem migration — a ordem inversa faria o
+  front chamar um caminho que ainda devolve 404. Nada a configurar.
 
 ## [1.1.0] — 2026-08-07
 
