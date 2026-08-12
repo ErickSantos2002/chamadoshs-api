@@ -32,9 +32,20 @@ USER appuser
 # Expose port
 EXPOSE 8000
 
-# Health check
+# Health check do CONTÊINER: "este processo ainda serve HTTP?"
+#
+# Aponta para /health (sem banco), e não para /api/v1/health (com banco), de
+# propósito. O que este comando decide é se o contêiner deve ser reiniciado, e
+# banco fora não se conserta reiniciando a API — o único efeito seria derrubar
+# a resposta "API no ar, banco fora" justamente durante o incidente em que ela
+# é a informação útil. A saúde das dependências é monitorada de fora, por
+# /api/v1/health; ver DEPLOY.md.
+#
+# raise_for_status() não é detalhe: sem ele, requests.get() considera sucesso
+# qualquer resposta HTTP, inclusive 500 e 503, e o healthcheck só falharia com
+# a porta fechada. Era o caso até aqui.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
+    CMD python -c "import requests; requests.get('http://localhost:8000/health', timeout=5).raise_for_status()" || exit 1
 
 # Run the application
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -129,8 +129,43 @@ python -c "import secrets; print(secrets.token_hex(32))"
 - Exemplo: `api.chamadoshs.com`
 
 #### Health Check
-- **Path**: `/health`
+- **Path**: `/api/v1/health`
 - **Port**: `8000`
+
+Existem dois caminhos de saúde, e eles respondem perguntas diferentes:
+
+| Caminho | Verifica | Quem usa | O que fazer quando falha |
+|---|---|---|---|
+| `/health` | só se a API responde | `HEALTHCHECK` do Dockerfile | reiniciar o contêiner |
+| `/api/v1/health` | API **e** banco (`SELECT 1`) | Easypanel e monitoramento | avisar alguém |
+
+A separação é a diferença entre *liveness* e *readiness*, e importa no
+incidente: **banco fora não se conserta reiniciando a API.** Se o healthcheck
+que decide reinício apontasse para `/api/v1/health`, uma queda do Postgres
+colocaria a API em ciclo de restart, e a resposta "API no ar, banco fora" —
+que é a informação útil naquele momento, e o motivo de o endpoint existir —
+desapareceria junto.
+
+Se o Easypanel usar o healthcheck configurado aqui para **reiniciar** o serviço
+(e não apenas para alertar), aponte-o para `/health` e monitore
+`/api/v1/health` por fora, com um monitor externo. Vale conferir esse
+comportamento antes de confiar na configuração.
+
+Respostas de `/api/v1/health`:
+
+```json
+// 200 — tudo no ar
+{"status": "ok", "banco": "ok", "hora": "2026-08-12T15:04:05.123456-03:00"}
+
+// 503 — API no ar, banco fora
+{"status": "degradado", "banco": "erro"}
+```
+
+O endpoint é **público** (não exige token): a faixa de status do frontend
+aparece antes do login e um monitor externo não tem credencial. Por isso a
+resposta é um contrato fechado de três campos — sem versão, host, nome de banco
+ou contagem de registros. Para diagnóstico detalhado existe
+`/api/v1/diagnostico/`, restrito a administrador.
 
 ### 4. Deploy
 
@@ -143,15 +178,24 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ### 1. Health Check
 
 ```bash
-curl https://seu-app.easypanel.host/health
+curl -i https://seu-app.easypanel.host/api/v1/health
 ```
 
-Resposta esperada:
+Resposta esperada — **200**, e é o código que importa conferir, não só o corpo:
 ```json
 {
-  "status": "healthy"
+  "status": "ok",
+  "banco": "ok",
+  "hora": "2026-08-12T15:04:05.123456-03:00"
 }
 ```
+
+Se vier **503** com `{"status": "degradado", "banco": "erro"}`, a API subiu e o
+banco não respondeu: confira `DATABASE_URL` e o serviço do Postgres. O motivo
+exato fica no log da aplicação — não no corpo da resposta, que é público.
+
+O `/health` simples continua existindo e responde `{"status": "healthy"}` sem
+tocar no banco. É o que o contêiner usa para saber se deve reiniciar.
 
 ### 2. Documentação
 

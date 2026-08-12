@@ -38,6 +38,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Mesma escolha do Dockerfile: /health (sem banco), porque este healthcheck
+    # decide reinício, e reiniciar a API não conserta banco fora. Para saber se
+    # o banco responde, use /api/v1/health — ver DEPLOY.md.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5).raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      start_period: 5s
+      retries: 3
     volumes:
       - ./:/app
     networks:

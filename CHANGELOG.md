@@ -13,6 +13,50 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 ## [Não publicado]
 
 ### Adicionado
+- **`GET /api/v1/health`**, público e barato o bastante para ser chamado a cada
+  60s, para a faixa de status do frontend e para monitoramento externo.
+
+  - **200** — `{"status": "ok", "banco": "ok", "hora": "<ISO-8601 com fuso>"}`
+  - **503** — `{"status": "degradado", "banco": "erro"}`
+
+  Verifica o banco com um `SELECT 1` e nada além disso. Não reaproveita
+  `/api/v1/diagnostico/`, que conta usuários, consulta `information_schema` e
+  monta amostra: aquilo é relatório administrativo, restrito a administrador e
+  caro por resposta — os dois existem separados de propósito.
+
+  **503 e não 200 com `status: degradado`**, porque o front precisa distinguir
+  "API caiu" (sem resposta) de "API no ar, banco fora" (503 com corpo). Um 200
+  carregando a palavra "degradado" faria todo monitoramento que olha só o código
+  de status — incluindo o do Easypanel — enxergar saúde onde não há.
+
+  **É o segundo endpoint público da API** (o outro é o login), e a resposta é um
+  contrato fechado de três campos por causa disso: sem versão, sem nome ou host
+  de banco, sem contagem de registros, sem nada do ambiente. Endpoint de saúde é
+  alvo clássico de reconhecimento, justamente por responder sem credencial. A
+  mensagem da exceção também não entra no corpo — um `OperationalError` do
+  psycopg2 traz host, porta, usuário e nome do banco no texto, e isso vai para o
+  log, onde o acesso já é controlado.
+
+  A abertura exigiu registrar a rota em `main.ROTAS_PUBLICAS`, senão a trava de
+  proteção derruba a aplicação na inicialização. Há teste conferindo que a
+  exceção é só essa e que nenhuma outra rota ficou aberta.
+
+  13 testes em `tests/test_health.py`, incluindo o caminho de banco fora e a
+  lista do que o corpo não pode conter.
+
+- **`HEALTHCHECK` do contêiner corrigido.** O comando fazia
+  `requests.get(...)` sem checar o resultado, e `requests` só levanta exceção
+  por falha de conexão: qualquer resposta HTTP contava como saudável, inclusive
+  500 e 503. Na prática o healthcheck só falharia com a porta fechada. Agora usa
+  `raise_for_status()` e `timeout=5`. O `docker-compose.yml`, que não tinha
+  healthcheck no serviço da API, ganhou o mesmo.
+
+  Ele aponta para `/health` (sem banco), e **não** para `/api/v1/health`. É o
+  que decide reinício de contêiner, e banco fora não se conserta reiniciando a
+  API: apontá-lo para a verificação com banco colocaria a API em ciclo de
+  restart durante uma queda do Postgres, destruindo a resposta "API no ar, banco
+  fora" exatamente quando ela é a informação útil. A saúde das dependências é
+  monitorada de fora. Tabela dos dois caminhos em `DEPLOY.md`.
 - **`PATCH /usuarios/{id}/desativar` e `/reativar`**, e os equivalentes em
   **`/setores/{id}`**. Passam a dizer no verbo o que o corpo sempre fez: o
   `DELETE` desses dois cadastros nunca apagou nada — desativava.
