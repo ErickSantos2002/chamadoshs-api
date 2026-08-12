@@ -192,7 +192,12 @@ curl -X POST "http://localhost:8000/api/v1/comentarios/" \
 - `GET /api/v1/usuarios/{id}` - Buscar usuário por ID
 - `POST /api/v1/usuarios/` - Criar usuário
 - `PUT /api/v1/usuarios/{id}` - Atualizar usuário
-- `DELETE /api/v1/usuarios/{id}` - Desativar usuário
+- `PATCH /api/v1/usuarios/{id}/desativar` - Desativar usuário (admin)
+- `PATCH /api/v1/usuarios/{id}/reativar` - Reativar usuário (admin)
+- `GET /api/v1/usuarios/{id}/eventos` - Trilha de auditoria da conta (admin)
+- `DELETE /api/v1/usuarios/{id}` - Desativa o usuário; delega para o `PATCH`
+  acima. Mantido por compatibilidade com o frontend atual, e será removido
+  quando ele migrar
 
 #### Comentários
 - `GET /api/v1/comentarios/chamado/{chamado_id}` - Listar comentários de um chamado
@@ -206,7 +211,15 @@ curl -X POST "http://localhost:8000/api/v1/comentarios/" \
 - `GET /api/v1/setores/{id}` - Buscar setor por ID
 - `POST /api/v1/setores/` - Criar setor
 - `PUT /api/v1/setores/{id}` - Atualizar setor
-- `DELETE /api/v1/setores/{id}` - Desativar setor
+- `PATCH /api/v1/setores/{id}/desativar` - Desativar setor (admin; recusa se
+  houver usuário ativo vinculado)
+- `PATCH /api/v1/setores/{id}/reativar` - Reativar setor (admin)
+- `DELETE /api/v1/setores/{id}` - Desativa o setor; delega para o `PATCH`
+  acima. **Passará a excluir de verdade** quando o frontend migrar
+
+#### Auditoria
+- `GET /api/v1/eventos/` - Trilha dos cadastros de usuários e setores (admin).
+  Filtros: `alvo` (`usuario`/`setor`), `ator_id`, `de`, `ate`, `skip`, `limit`
 
 #### Categorias
 - `GET /api/v1/categorias/` - Listar categorias

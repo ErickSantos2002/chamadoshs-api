@@ -13,6 +13,81 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 ## [Não publicado]
 
 ### Adicionado
+- **`PATCH /usuarios/{id}/desativar` e `/reativar`**, e os equivalentes em
+  **`/setores/{id}`**. Passam a dizer no verbo o que o corpo sempre fez: o
+  `DELETE` desses dois cadastros nunca apagou nada — desativava.
+
+  **O `DELETE` continua existindo e delega para o mesmo corpo**, então o
+  frontend não quebra e as duas rotas não têm como divergir. A única diferença
+  entre elas é a `origem` gravada na trilha, e é ela que responde quando a
+  migração do frontend terminou:
+
+  ```sql
+  SELECT origem, count(*) FROM eventos_de_conta
+  WHERE acao = 'desativacao' GROUP BY origem;
+  ```
+
+  Compartilhar o corpo não é economia de linhas: foi a duplicação entre
+  `DELETE` e `PUT` que deixou, até 11/08/2026, um `PUT {"ativo": false}`
+  derrubar o último administrador pela porta que o `DELETE` trancava.
+
+  Os `PATCH` devolvem o registro atualizado (200), e não 204, para a tela
+  atualizar a linha sem uma segunda requisição. Desativar quem já está inativo
+  responde sucesso e **não** gera evento — o estado pedido é o estado final, e
+  a trilha registra mudança, não requisição.
+
+- **Trilha de auditoria do cadastro de setores** (`eventos_de_setor`), irmã da
+  de contas. Migration em `migrations/2026-08-12-add-eventos-de-setor.sql`.
+
+  Tabela separada, e não uma coluna a mais na de contas, por causa do **futuro
+  do alvo**. Em `eventos_de_conta` o alvo é FK sem `ON DELETE`, o que faz o
+  banco recusar apagar uma conta que aparece na trilha — ali isso é o ponto.
+  Para setor seria uma armadilha: o passo seguinte torna setor apagável de
+  verdade, e a mesma FK faria um setor renomeado uma vez **nunca mais poder ser
+  excluído**. O evento sobreviveria ao setor só para impedi-lo de morrer.
+
+  O que substitui a FK é o par **`setor_id` (sem FK) + `setor_nome` congelado**
+  no momento do evento: o id liga os eventos do mesmo setor entre si mesmo
+  depois de a linha sumir, e o nome diz que setor era aquele sem depender de uma
+  consulta que devolveria o presente — ou nada. O `ator_id` mantém a FK, porque
+  quem se apaga aqui é o setor, não a conta.
+
+  Grava em todos os caminhos: `POST`, `PUT`, os dois `PATCH` e o `DELETE`.
+
+- **Leitura da trilha pela aplicação**, que até aqui só saía por SQL no banco:
+  - **`GET /usuarios/{id}/eventos`** (admin) — o que aconteceu com UMA conta,
+    para o painel de histórico do modal de usuário. Escopado pelo alvo: o que
+    a conta fez com outras não entra. 404 para conta inexistente, porque lista
+    vazia se leria como "esta conta nunca foi tocada".
+  - **`GET /eventos`** (admin) — a tela de auditoria, com filtros `alvo`,
+    `ator_id`, `de`, `ate` e paginação. Junta os dois cadastros num formato só:
+    a pergunta é "quem fez o quê, com o quê, e quando", e ela não muda conforme
+    a tabela. `alvo_tipo` diz de onde a linha veio e `chave` é única na trilha
+    inteira — os ids das duas tabelas colidem entre si.
+
+  O período é **em dias, com os dois extremos incluídos**: `ate=2026-08-12`
+  cobre o dia 12 até o fim, não até a meia-noite dele — que devolveria lista
+  vazia justamente para quem filtra o dia corrente.
+
+  Router próprio (`/api/v1/eventos`) em vez de rota sob `/usuarios`: a listagem
+  cobre os dois cadastros, e `/usuarios/eventos` dependeria da ordem de
+  declaração para não ser engolida por `/usuarios/{usuario_id}`.
+
+- **Trava: desativar setor com usuários ativos vinculados devolve 400.** Setor
+  inativo some do seletor do formulário mas não solta quem aponta para ele; as
+  contas ficam presas a um setor que a tela não oferece mais, e o estrago
+  aparece longe da causa — na hora de editar uma dessas pessoas. Vale nos três
+  caminhos (`PATCH`, `PUT` e `DELETE`) desde já, em vez de repetir a lição do
+  `PUT` de usuários.
+
+  A contagem é de usuários **ativos**. Setor extinto anos atrás ainda tem
+  ex-funcionários apontando para ele, e esses vínculos são o histórico que não
+  se apaga — contá-los tornaria todo setor antigo indesativável.
+
+- 66 testes em `tests/test_patch_desativar_reativar.py`,
+  `tests/test_eventos_de_setor.py`, `tests/test_consulta_da_trilha.py` e
+  `tests/test_vinculos_do_cadastro.py`.
+
 - **Trilha de auditoria do cadastro de usuários** (`eventos_de_conta`), que
   responde "**quem** fez **o quê** com **qual conta**, e **quando**" — pergunta
   de ISO 27001 que o sistema não respondia. Migration em
@@ -62,8 +137,10 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   rastro — o evento e a mudança são gravados na mesma transação, então não
   existe conta alterada sem evento nem evento de algo que não aconteceu.
 
-  Sem endpoint de leitura por enquanto: a consulta sai por SQL (exemplo pronto
-  no fim da migration). Quando a trilha for para tela, vira `GET`.
+  A leitura pela aplicação entrou junto, nesta mesma versão: `GET
+  /usuarios/{id}/eventos` e `GET /eventos` (ver acima). Os dois foram escritos
+  depois da gravação, de propósito — a tabela precisava existir e estar sendo
+  preenchida antes de valer a pena consultá-la.
 
   22 testes em `tests/test_eventos_de_conta.py`, cobrindo cada caminho de
   gravação, o de/para encadeado, a ausência de senha e a ausência de `ON
@@ -129,6 +206,22 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   com o container em UTC e o sistema operando em horário de Brasília.
 
 ### Alterado
+- **`POST` e `PUT /usuarios/` devolvem 400, e não 500, para `role_id` ou
+  `setor_id` inexistente.** O valor inválido seguia até o banco e voltava como
+  erro de FK, que o FastAPI entrega como 500: a resposta afirmava defeito do
+  servidor sobre dado inválido do cliente, e a tela mostrava erro genérico em
+  vez de dizer o que houve. As travas de administrador do mesmo formulário já
+  respondiam 400 — as duas recusas saíam em códigos diferentes.
+
+  A validação roda **antes** das travas, para a mensagem descrever o que
+  aconteceu: um `role_id` inexistente também não é administrador, então a trava
+  de rebaixamento barraria a requisição sozinha, falando de rebaixamento a
+  partir de um id que não resolve para perfil nenhum.
+
+  `setor_id: null` continua passando: é como se tira alguém de um setor. Setor
+  **inativo** também — a validação é sobre existir, não sobre estar ativo, e
+  barrá-lo aqui quebraria a edição de quem já está vinculado a um deles, já que
+  o modal reenvia o cadastro inteiro em toda gravação.
 - A URL do webhook do n8n saiu do código e virou `WEBHOOK_TECNICO_URL`. O
   padrão vazio desliga o envio, para desenvolvimento e testes não dispararem
   notificação no fluxo de produção por descuido.
@@ -258,6 +351,36 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
   A trilha começa do deploy em diante; o que aconteceu antes não é
   recuperável, porque não existe fonte de onde reconstruir.
+- **Migration `migrations/2026-08-12-add-eventos-de-setor.sql`**: aplicar
+  **antes** de subir a imagem, pelos mesmos motivos da de cima — todo
+  `POST`/`PUT`/`PATCH`/`DELETE` de setor passa a gravar nela, e com o banco
+  antigo o código novo derruba a edição de setor inteira. `CREATE TABLE` puro,
+  idempotente, sem nada a configurar no Easypanel.
+
+- **ORDEM DAS DUAS MIGRATIONS.** São duas, e nenhuma delas rodou em produção
+  ainda: `2026-08-12-add-eventos-de-conta.sql` foi escrita na entrega anterior
+  e ficou esperando este deploy. Rodar as duas, uma de cada vez, **antes** de
+  subir a imagem:
+
+  1. `migrations/2026-08-12-add-eventos-de-conta.sql`
+  2. `migrations/2026-08-12-add-eventos-de-setor.sql`
+  3. subir a imagem
+
+  A ordem entre 1 e 2 não é dependência técnica — as tabelas não se
+  referenciam — é só para conferir o resultado de cada uma isoladamente; cada
+  arquivo termina com as consultas de verificação. Subir a imagem sem uma delas
+  quebra o cadastro correspondente na primeira gravação.
+
+- **Nenhuma rota mudou de comportamento nesta versão**, então o frontend atual
+  continua funcionando sem ajuste: `DELETE` de usuário e de setor respondem
+  como sempre responderam. As rotas novas (`PATCH .../desativar`,
+  `PATCH .../reativar`, `GET /eventos`) ficam disponíveis para o frontend
+  adotar quando for conveniente — e é essa adoção que o passo seguinte espera.
+
+  **O que vem depois, e por que ainda não veio:** o `DELETE` de setor passará a
+  apagar de verdade, e o de usuário sairá de cena. Esse é o único passo que
+  quebra cliente, e só acontece depois que o frontend migrar para os `PATCH`.
+  A consulta de `origem` acima é o que diz quando isso é seguro.
 - **`PATCH /chamados/{id}/avaliar`**: subir a API **antes** de ligar o widget
   de estrelas no frontend. Rota nova, sem migration — a ordem inversa faria o
   front chamar um caminho que ainda devolve 404. Nada a configurar.
