@@ -331,8 +331,8 @@ class TestSenhaNaoEntraNaTrilha:
         self, cliente, dados, sessao, autenticar
     ):
         """
-        É o que distingue trocar a própria senha de ter a senha redefinida por
-        um administrador, sem precisar de dois verbos.
+        Ator e alvo iguais, e a `origem` dizendo por qual porta passou. Quem
+        classifica o evento é a segunda: ver o teste seguinte.
         """
         self._com_senha(sessao, dados)
 
@@ -348,6 +348,33 @@ class TestSenhaNaoEntraNaTrilha:
         assert evento.acao == ACAO_ALTERACAO_DE_SENHA
         assert evento.ator_id == evento.usuario_id == dados["comum_id"]
         assert evento.origem == "POST /api/v1/auth/alterar-senha"
+
+    def test_admin_resetando_a_propria_senha_so_se_separa_pela_origem(
+        self, cliente, dados, sessao, autenticar
+    ):
+        """
+        O caso que torna `ator_id == usuario_id` insuficiente para classificar
+        o evento: o botão de resetar senha da aba de Usuários aparece também na
+        linha do próprio administrador — só o de desativar exclui a si mesmo.
+        Esse reset chega por `PUT`, com ator e alvo iguais, idêntico em forma a
+        uma troca própria legítima.
+
+        E as duas são coisas diferentes em auditoria: `/auth/alterar-senha`
+        exige a senha atual — "trocou sabendo a antiga" — e o `PUT` não —
+        "sobrescreveu usando poder de administrador". Quem separa é a `origem`.
+        """
+        resposta = cliente.put(
+            f"/api/v1/usuarios/{dados['admin_id']}",
+            json={"senha": "outra-senha-123"},
+            headers=_como_admin(autenticar, dados),
+        )
+
+        assert resposta.status_code == 200
+
+        evento = _unico(sessao, dados["admin_id"])
+        assert evento.acao == ACAO_ALTERACAO_DE_SENHA
+        assert evento.ator_id == evento.usuario_id == dados["admin_id"]
+        assert evento.origem == "PUT /api/v1/usuarios/{id}"
 
     def test_senha_atual_errada_nao_grava_nada(self, cliente, dados, sessao, autenticar):
         self._com_senha(sessao, dados)

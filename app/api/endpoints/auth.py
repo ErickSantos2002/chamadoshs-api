@@ -256,9 +256,15 @@ def alterar_senha(
     # Atualizar senha
     antes = instantaneo(current_user)
     current_user.senha_hash = gerar_hash_senha(dados.senha_nova)
-    # Ator e alvo são a mesma conta: é assim que a troca feita pela própria
-    # pessoa se distingue da redefinição por um administrador (PUT com
-    # `senha`), sem precisar de dois verbos.
+    # Ator e alvo são a mesma conta. O que classifica o evento em auditoria,
+    # porém, é a `origem`, e NÃO `ator_id == usuario_id`: o botão de resetar
+    # senha da aba de Usuários aparece também na linha do próprio
+    # administrador, então um reset de si mesmo chega por
+    # `PUT /usuarios/{id}` com ator e alvo iguais.
+    #
+    # A diferença é de fundo, não de forma: esta rota exige a senha atual
+    # ("trocou sabendo a antiga") e o PUT não ("sobrescreveu usando poder de
+    # administrador"). Só a rota separa as duas.
     registrar_alteracoes(
         db,
         usuario=current_user,

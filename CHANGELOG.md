@@ -42,6 +42,13 @@ cada versão lista o que precisa ser feito além de subir a imagem.
     `PATCH` de desativar/reativar conviverem, é por ela que se mede o que o
     frontend ainda usa (`GROUP BY origem`).
 
+  **Como ler um evento de senha:** quem classifica é a `origem`, não o
+  `ator_id`. `POST /auth/alterar-senha` exige a senha atual ("trocou sabendo a
+  antiga"); `PUT /usuarios/{id}` com `senha` não ("sobrescreveu usando poder de
+  administrador"). Ator igual ao alvo **não** identifica a primeira: o botão de
+  resetar senha da aba de Usuários aparece também na linha do próprio
+  administrador, e esse reset chega pelo `PUT` com ator e alvo iguais.
+
   **Grava em todos os caminhos que alteram cadastro, não só nos novos**: `PUT` e
   `DELETE /usuarios/{id}`, `POST /usuarios/`, `POST /auth/registro` e
   `POST /auth/alterar-senha`. O `PUT` é por onde o frontend edita usuário hoje e
