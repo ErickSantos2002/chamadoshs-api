@@ -173,6 +173,30 @@ CREATE TABLE IF NOT EXISTS eventos_de_conta (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Trilha de auditoria do cadastro de SETORES. Irmã da de cima, com uma
+-- diferença deliberada: o alvo (`setor_id`) NÃO tem foreign key.
+--
+-- Em `eventos_de_conta` a FK sem ON DELETE faz o banco recusar apagar uma conta
+-- que aparece na trilha, e isso é o ponto — conta que sai vira inativa, não
+-- sumida. Setor, ao contrário, é apagável de verdade; uma FK aqui faria um
+-- setor renomeado uma vez nunca mais poder ser excluído.
+--
+-- O par `setor_id` + `setor_nome` cobre o que a FK cobriria: o id liga os
+-- eventos do mesmo setor entre si mesmo depois de a linha sumir, e o nome
+-- congelado diz que setor era aquele sem depender de uma consulta ao presente.
+-- O ator mantém a FK: quem agiu não pode evaporar da trilha.
+CREATE TABLE IF NOT EXISTS eventos_de_setor (
+    id SERIAL PRIMARY KEY,
+    setor_id INTEGER NOT NULL,
+    setor_nome VARCHAR(100) NOT NULL,
+    ator_id INTEGER NOT NULL REFERENCES usuarios(id),
+    acao VARCHAR(50) NOT NULL,
+    valor_anterior VARCHAR(255),
+    valor_novo VARCHAR(255),
+    origem VARCHAR(60),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Tabela de Anexos
 CREATE TABLE IF NOT EXISTS anexos (
     id SERIAL PRIMARY KEY,
@@ -251,6 +275,9 @@ CREATE INDEX IF NOT EXISTS idx_historico_chamado ON historico_chamados(chamado_i
 CREATE INDEX IF NOT EXISTS idx_eventos_conta_usuario ON eventos_de_conta(usuario_id);
 CREATE INDEX IF NOT EXISTS idx_eventos_conta_ator ON eventos_de_conta(ator_id);
 CREATE INDEX IF NOT EXISTS idx_eventos_conta_data ON eventos_de_conta(created_at);
+CREATE INDEX IF NOT EXISTS idx_eventos_setor_setor ON eventos_de_setor(setor_id);
+CREATE INDEX IF NOT EXISTS idx_eventos_setor_ator ON eventos_de_setor(ator_id);
+CREATE INDEX IF NOT EXISTS idx_eventos_setor_data ON eventos_de_setor(created_at);
 CREATE INDEX IF NOT EXISTS idx_comentarios_chamado ON comentarios_chamados(chamado_id);
 CREATE INDEX IF NOT EXISTS idx_anexos_chamado ON anexos(chamado_id);
 CREATE INDEX IF NOT EXISTS idx_usuarios_setor ON usuarios(setor_id);
@@ -361,6 +388,7 @@ COMMENT ON TABLE chamados IS 'Chamados/Tickets de suporte';
 COMMENT ON TABLE comentarios_chamados IS 'Comentários e conversas nos chamados';
 COMMENT ON TABLE historico_chamados IS 'Histórico de alterações para auditoria';
 COMMENT ON TABLE eventos_de_conta IS 'Trilha de auditoria do cadastro de usuários: quem fez o quê com qual conta';
+COMMENT ON TABLE eventos_de_setor IS 'Trilha de auditoria do cadastro de setores: quem fez o quê com qual setor';
 COMMENT ON TABLE anexos IS 'Arquivos anexados aos chamados';
 COMMENT ON TABLE sla_configs IS 'Prazos de SLA por prioridade, em minutos úteis';
 COMMENT ON TABLE tarefas_recorrentes IS 'Rotinas periódicas da equipe; não são chamados';
@@ -381,6 +409,11 @@ COMMENT ON COLUMN eventos_de_conta.acao IS 'criacao, desativacao, reativacao, al
 COMMENT ON COLUMN eventos_de_conta.valor_anterior IS 'Valor antes da mudança, em texto legível; NULL em evento sem valores (senha)';
 COMMENT ON COLUMN eventos_de_conta.valor_novo IS 'Valor depois da mudança, em texto legível; nunca guarda senha nem hash';
 COMMENT ON COLUMN eventos_de_conta.origem IS 'Rota que gravou o evento, como template (ex: PUT /api/v1/usuarios/{id})';
+COMMENT ON COLUMN eventos_de_setor.setor_id IS 'Alvo: o setor que sofreu a mudança. SEM FK de propósito — a trilha precisa sobreviver à exclusão do setor';
+COMMENT ON COLUMN eventos_de_setor.setor_nome IS 'Nome do setor no momento do evento; congelado para não depender da linha em setores';
+COMMENT ON COLUMN eventos_de_setor.ator_id IS 'Quem fez a mudança (usuário autenticado na requisição)';
+COMMENT ON COLUMN eventos_de_setor.acao IS 'criacao, desativacao, reativacao, alteracao_de_nome/descricao';
+COMMENT ON COLUMN eventos_de_setor.origem IS 'Rota que gravou o evento, como template (ex: PATCH /api/v1/setores/{id}/desativar)';
 
 -- ============================================
 -- FIM DO SCHEMA
