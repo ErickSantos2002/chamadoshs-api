@@ -7,6 +7,11 @@ from app.models.role import Role
 from app.models.usuario import Usuario
 from app.schemas.usuario import UsuarioCreate, UsuarioUpdate, UsuarioResponse
 from app.core.security import gerar_hash_senha
+from app.services.evento_conta_service import (
+    instantaneo,
+    registrar_alteracoes,
+    registrar_criacao,
+)
 
 router = APIRouter()
 
@@ -124,7 +129,7 @@ def buscar_usuario(usuario_id: int, db: Session = Depends(get_db)):
 @router.post("/", response_model=UsuarioResponse, status_code=status.HTTP_201_CREATED)
 def criar_usuario(
     usuario_data: UsuarioCreate,
-    _admin: Usuario = Depends(require_admin),
+    admin: Usuario = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -147,6 +152,13 @@ def criar_usuario(
     # Cria o usuário com senha hasheada
     usuario = Usuario(**usuario_dict)
     db.add(usuario)
+    # flush antes do commit: o evento precisa do id, que só existe depois de a
+    # linha chegar ao banco. Continua sendo uma transação só — conta criada sem
+    # evento não é um estado alcançável.
+    db.flush()
+    registrar_criacao(
+        db, usuario=usuario, ator=admin, origem="POST /api/v1/usuarios/"
+    )
     db.commit()
     db.refresh(usuario)
     return usuario
@@ -176,6 +188,11 @@ def atualizar_usuario(
 
     update_data = usuario_data.model_dump(exclude_unset=True)
 
+    # Estado de antes, para a trilha de auditoria. Precisa ser tirado agora:
+    # depois do setattr o valor anterior não existe mais em lugar nenhum.
+    antes = instantaneo(usuario)
+    senha_alterada = "senha" in update_data
+
     # Só quando `ativo` chega como false. Reativar é hoje o único caminho de
     # volta pela interface — aplicar as travas a qualquer mudança de `ativo`
     # bloquearia justamente a recuperação, em vez do dano.
@@ -192,6 +209,18 @@ def atualizar_usuario(
 
     for field, value in update_data.items():
         setattr(usuario, field, value)
+
+    # O PUT também desativa e troca perfil, e é por ele que o cadastro é
+    # editado hoje. Registrar só nas rotas novas deixaria invisível justamente
+    # o caminho em uso.
+    registrar_alteracoes(
+        db,
+        usuario=usuario,
+        antes=antes,
+        ator=admin,
+        origem="PUT /api/v1/usuarios/{id}",
+        senha_alterada=senha_alterada,
+    )
 
     db.commit()
     db.refresh(usuario)
@@ -216,6 +245,17 @@ def deletar_usuario(
 
     _garantir_desativacao_segura(db, usuario, admin)
 
+    antes = instantaneo(usuario)
     usuario.ativo = False
+    # Mesma função do PUT: o evento gravado é o mesmo, só muda a `origem`.
+    # Desativar quem já estava inativo não muda nada e, por isso, não gera
+    # evento — a trilha registra mudança, não requisição.
+    registrar_alteracoes(
+        db,
+        usuario=usuario,
+        antes=antes,
+        ator=admin,
+        origem="DELETE /api/v1/usuarios/{id}",
+    )
     db.commit()
     return None

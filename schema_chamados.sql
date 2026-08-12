@@ -144,6 +144,35 @@ CREATE TABLE IF NOT EXISTS historico_chamados (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Tabela de Eventos de Conta (Auditoria do cadastro de usuários)
+--
+-- Responde "quem fez o quê com qual conta, e quando", que é pergunta de
+-- ISO 27001 e que nada aqui respondia: `historico_chamados` é escopado por
+-- chamado (`chamado_id NOT NULL` + `ON DELETE CASCADE`) e `usuarios.updated_at`
+-- é sobrescrito por qualquer edição, sem guardar autor.
+--
+-- ATOR (`ator_id`) e ALVO (`usuario_id`) são colunas separadas: "a conta X foi
+-- desativada" sem dizer por quem não é evidência de nada.
+--
+-- Nenhuma das duas FKs declara ON DELETE — no PostgreSQL isso é NO ACTION, e é
+-- proposital: apagar uma conta que aparece na trilha é recusado pelo banco. Um
+-- CASCADE aqui apagaria a trilha exatamente no caso em que ela importa.
+--
+-- Cada linha é UMA mudança, com valor anterior e novo em texto legível (nome do
+-- perfil, nome do setor, `true`/`false`), o que permite reconstruir o de/para
+-- mesmo depois de o alvo mudar de novo. Senha e hash nunca entram nesses
+-- campos: alteração de senha vira evento sem valores.
+CREATE TABLE IF NOT EXISTS eventos_de_conta (
+    id SERIAL PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    ator_id INTEGER NOT NULL REFERENCES usuarios(id),
+    acao VARCHAR(50) NOT NULL,
+    valor_anterior VARCHAR(255),
+    valor_novo VARCHAR(255),
+    origem VARCHAR(60),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Tabela de Anexos
 CREATE TABLE IF NOT EXISTS anexos (
     id SERIAL PRIMARY KEY,
@@ -219,6 +248,9 @@ CREATE INDEX IF NOT EXISTS idx_chamados_categoria ON chamados(categoria_id);
 CREATE INDEX IF NOT EXISTS idx_chamados_cancelado ON chamados(cancelado);
 CREATE INDEX IF NOT EXISTS idx_chamados_arquivado ON chamados(arquivado);
 CREATE INDEX IF NOT EXISTS idx_historico_chamado ON historico_chamados(chamado_id);
+CREATE INDEX IF NOT EXISTS idx_eventos_conta_usuario ON eventos_de_conta(usuario_id);
+CREATE INDEX IF NOT EXISTS idx_eventos_conta_ator ON eventos_de_conta(ator_id);
+CREATE INDEX IF NOT EXISTS idx_eventos_conta_data ON eventos_de_conta(created_at);
 CREATE INDEX IF NOT EXISTS idx_comentarios_chamado ON comentarios_chamados(chamado_id);
 CREATE INDEX IF NOT EXISTS idx_anexos_chamado ON anexos(chamado_id);
 CREATE INDEX IF NOT EXISTS idx_usuarios_setor ON usuarios(setor_id);
@@ -328,6 +360,7 @@ COMMENT ON TABLE categorias IS 'Categorias de chamados';
 COMMENT ON TABLE chamados IS 'Chamados/Tickets de suporte';
 COMMENT ON TABLE comentarios_chamados IS 'Comentários e conversas nos chamados';
 COMMENT ON TABLE historico_chamados IS 'Histórico de alterações para auditoria';
+COMMENT ON TABLE eventos_de_conta IS 'Trilha de auditoria do cadastro de usuários: quem fez o quê com qual conta';
 COMMENT ON TABLE anexos IS 'Arquivos anexados aos chamados';
 COMMENT ON TABLE sla_configs IS 'Prazos de SLA por prioridade, em minutos úteis';
 COMMENT ON TABLE tarefas_recorrentes IS 'Rotinas periódicas da equipe; não são chamados';
@@ -342,6 +375,12 @@ COMMENT ON COLUMN chamados.arquivado IS 'Sai da visualização padrão sem ser c
 COMMENT ON COLUMN comentarios_chamados.is_interno IS 'Se TRUE, visível apenas para técnicos';
 COMMENT ON COLUMN usuarios.senha_hash IS 'Hash bcrypt da senha do usuário';
 COMMENT ON COLUMN usuarios.conta_de_servico IS 'Conta que não representa uma pessoa (painel, integração, login compartilhado)';
+COMMENT ON COLUMN eventos_de_conta.usuario_id IS 'Alvo: a conta que sofreu a mudança';
+COMMENT ON COLUMN eventos_de_conta.ator_id IS 'Quem fez a mudança (usuário autenticado na requisição)';
+COMMENT ON COLUMN eventos_de_conta.acao IS 'criacao, desativacao, reativacao, alteracao_de_nome/perfil/setor/senha/conta_de_servico';
+COMMENT ON COLUMN eventos_de_conta.valor_anterior IS 'Valor antes da mudança, em texto legível; NULL em evento sem valores (senha)';
+COMMENT ON COLUMN eventos_de_conta.valor_novo IS 'Valor depois da mudança, em texto legível; nunca guarda senha nem hash';
+COMMENT ON COLUMN eventos_de_conta.origem IS 'Rota que gravou o evento, como template (ex: PUT /api/v1/usuarios/{id})';
 
 -- ============================================
 -- FIM DO SCHEMA

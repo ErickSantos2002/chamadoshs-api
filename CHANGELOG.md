@@ -13,6 +13,55 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 ## [Não publicado]
 
 ### Adicionado
+- **Trilha de auditoria do cadastro de usuários** (`eventos_de_conta`), que
+  responde "**quem** fez **o quê** com **qual conta**, e **quando**" — pergunta
+  de ISO 27001 que o sistema não respondia. Migration em
+  `migrations/2026-08-12-add-eventos-de-conta.sql`.
+
+  Não havia de onde tirar essa resposta. `historico_chamados` é escopado por
+  chamado (`chamado_id NOT NULL` + `ON DELETE CASCADE`), então evento de usuário
+  não cabe lá e o que coubesse sumiria junto com o chamado;
+  `usuarios.updated_at` é sobrescrito por qualquer edição e não guarda autor.
+
+  Formato, e o motivo de cada escolha:
+
+  - **Ator e alvo em colunas separadas** (`ator_id`, `usuario_id`). "A conta X
+    foi desativada" sem dizer por quem não é evidência.
+  - **Nenhuma das duas FKs tem `ON DELETE`** — no PostgreSQL, `NO ACTION`.
+    Apagar uma conta que aparece na trilha passa a ser recusado pelo banco. Com
+    `CASCADE`, a trilha morreria junto com a conta, isto é, exatamente no caso
+    em que ela é procurada.
+  - **Uma linha por mudança, com `valor_anterior` e `valor_novo`** em texto
+    legível. Registrar só "perfil alterado" tornaria impossível reconstruir o
+    de/para depois da segunda alteração. Perfil e setor guardam o **nome**, não
+    o id: o nome congela o que o valor significava naquele momento, enquanto o
+    id depende de uma consulta que devolve o presente.
+  - **Senha e hash nunca entram nos valores.** A alteração de senha é evento
+    sem valores; há teste procurando a senha e os dois hashes na trilha inteira.
+  - `origem` guarda a rota que gravou, como template. Enquanto o `DELETE` e os
+    `PATCH` de desativar/reativar conviverem, é por ela que se mede o que o
+    frontend ainda usa (`GROUP BY origem`).
+
+  **Grava em todos os caminhos que alteram cadastro, não só nos novos**: `PUT` e
+  `DELETE /usuarios/{id}`, `POST /usuarios/`, `POST /auth/registro` e
+  `POST /auth/alterar-senha`. O `PUT` é por onde o frontend edita usuário hoje e
+  também muda `ativo` e `role_id` — gravar só nas rotas novas faria a trilha
+  nascer cega justamente para o uso real, e trilha incompleta é pior que
+  trilha nenhuma, porque é lida como se fosse completa.
+
+  A trilha registra **mudança, não requisição**: campo reenviado com o mesmo
+  valor não gera evento (o modal de usuário envia o cadastro inteiro em toda
+  gravação), e requisição recusada pelas travas de administrador não deixa
+  rastro — o evento e a mudança são gravados na mesma transação, então não
+  existe conta alterada sem evento nem evento de algo que não aconteceu.
+
+  Sem endpoint de leitura por enquanto: a consulta sai por SQL (exemplo pronto
+  no fim da migration). Quando a trilha for para tela, vira `GET`.
+
+  22 testes em `tests/test_eventos_de_conta.py`, cobrindo cada caminho de
+  gravação, o de/para encadeado, a ausência de senha e a ausência de `ON
+  DELETE` nas FKs.
+
 - **`usuarios.conta_de_servico`** (`BOOLEAN NOT NULL DEFAULT false`), exposto em
   `UsuarioResponse` e aceito em `UsuarioCreate` e `UsuarioUpdate`. Marca contas
   que não representam pessoas — painel de parede, integração, login
@@ -192,6 +241,16 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   (`ADD COLUMN IF NOT EXISTS`); sem reversão automática — o rollback é o backup.
   Marcar as contas de serviço é um `UPDATE` separado, comentado no fim do
   arquivo, para ser rodado depois de conferir os nomes.
+- **Migration `migrations/2026-08-12-add-eventos-de-conta.sql`**: aplicar
+  **antes** de subir a imagem. Todo `POST`/`PUT`/`DELETE` de usuário passa a
+  gravar na tabela nova — com o banco antigo, o código novo derruba a edição de
+  cadastro inteira. É `CREATE TABLE` puro: aditivo, não toca em dado existente
+  e é idempotente (`IF NOT EXISTS`). Aplicar antes é seguro mesmo que o deploy
+  atrase, e rollback da imagem depois também — tabela vazia que ninguém lê não
+  muda o comportamento do que está no ar. Nada a configurar no Easypanel.
+
+  A trilha começa do deploy em diante; o que aconteceu antes não é
+  recuperável, porque não existe fonte de onde reconstruir.
 - **`PATCH /chamados/{id}/avaliar`**: subir a API **antes** de ligar o widget
   de estrelas no frontend. Rota nova, sem migration — a ordem inversa faria o
   front chamar um caminho que ainda devolve 404. Nada a configurar.

@@ -17,6 +17,11 @@ from app.schemas.auth import (
 )
 from app.core.security import verificar_senha, gerar_hash_senha, criar_token_acesso
 from app.core.config import settings
+from app.services.evento_conta_service import (
+    instantaneo,
+    registrar_alteracoes,
+    registrar_criacao,
+)
 
 router = APIRouter()
 
@@ -155,7 +160,7 @@ def login(request: Request, credentials: LoginRequest, db: Session = Depends(get
 @router.post("/registro", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def registrar_usuario(
     usuario_data: UsuarioCreate,
-    _admin: Usuario = Depends(require_admin),
+    admin: Usuario = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
@@ -188,6 +193,13 @@ def registrar_usuario(
     )
 
     db.add(novo_usuario)
+    # Esta rota duplica POST /api/v1/usuarios/. Enquanto as duas existirem, as
+    # duas gravam evento de criação — senão a trilha teria um buraco que só
+    # aparece quando alguém usa a rota antiga.
+    db.flush()
+    registrar_criacao(
+        db, usuario=novo_usuario, ator=admin, origem="POST /api/v1/auth/registro"
+    )
     db.commit()
     db.refresh(novo_usuario)
 
@@ -242,7 +254,19 @@ def alterar_senha(
         )
 
     # Atualizar senha
+    antes = instantaneo(current_user)
     current_user.senha_hash = gerar_hash_senha(dados.senha_nova)
+    # Ator e alvo são a mesma conta: é assim que a troca feita pela própria
+    # pessoa se distingue da redefinição por um administrador (PUT com
+    # `senha`), sem precisar de dois verbos.
+    registrar_alteracoes(
+        db,
+        usuario=current_user,
+        antes=antes,
+        ator=current_user,
+        origem="POST /api/v1/auth/alterar-senha",
+        senha_alterada=True,
+    )
     db.commit()
 
     return {"message": "Senha alterada com sucesso"}

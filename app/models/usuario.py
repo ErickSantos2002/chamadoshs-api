@@ -35,3 +35,15 @@ class Usuario(Base):
     comentarios = relationship("ComentarioChamado", back_populates="usuario")
     historicos = relationship("HistoricoChamado", back_populates="usuario")
     anexos = relationship("Anexo", back_populates="usuario")
+    # Os dois lados da trilha de auditoria de cadastro: o que fizeram com esta
+    # conta e o que esta conta fez com outras.
+    eventos_de_conta = relationship(
+        "EventoDeConta",
+        foreign_keys="EventoDeConta.usuario_id",
+        back_populates="usuario",
+    )
+    eventos_praticados = relationship(
+        "EventoDeConta",
+        foreign_keys="EventoDeConta.ator_id",
+        back_populates="ator",
+    )
