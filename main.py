@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.api.deps import get_current_user, require_admin
-from app.api.endpoints import auth, chamados, usuarios, comentarios, setores, categorias, historico, diagnostico, sla_configs, tarefas_recorrentes
+from app.api.endpoints import auth, chamados, usuarios, comentarios, setores, categorias, historico, diagnostico, eventos, sla_configs, tarefas_recorrentes
 
 # Docs só em desenvolvimento. openapi_url precisa cair junto: sem isso,
 # /openapi.json continuaria servindo o mapa completo da API e o bloqueio
@@ -113,6 +113,22 @@ app.include_router(
     diagnostico.router,
     prefix="/api/v1/diagnostico",
     tags=["Diagnóstico"],
+    dependencies=[Depends(require_admin)],
+)
+
+# Trilha de auditoria dos cadastros (usuários e setores).
+#
+# Router próprio, e não uma rota dentro de /usuarios, por duas razões: a
+# listagem cobre os dois cadastros — ficaria torto sob o prefixo de um deles —
+# e `/usuarios/eventos` conviveria com `/usuarios/{usuario_id}` dependendo da
+# ordem de declaração para não ser engolida pelo path int.
+#
+# Restrito a administrador no router inteiro, como diagnóstico: a trilha diz
+# quem fez o quê com a conta de quem.
+app.include_router(
+    eventos.router,
+    prefix="/api/v1/eventos",
+    tags=["Auditoria"],
     dependencies=[Depends(require_admin)],
 )
 
