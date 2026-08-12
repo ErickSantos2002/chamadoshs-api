@@ -217,6 +217,10 @@ curl -X POST "http://localhost:8000/api/v1/comentarios/" \
 - `DELETE /api/v1/setores/{id}` - Desativa o setor; delega para o `PATCH`
   acima. **Passará a excluir de verdade** quando o frontend migrar
 
+#### Saúde
+- `GET /api/v1/health` - Estado da API e do banco. **Público**. 200 saudável,
+  503 quando o banco não responde
+
 #### Auditoria
 - `GET /api/v1/eventos/` - Trilha dos cadastros de usuários e setores (admin).
   Filtros: `alvo` (`usuario`/`setor`), `ator_id`, `de`, `ate`, `skip`, `limit`

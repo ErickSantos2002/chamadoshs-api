@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.api.deps import get_current_user, require_admin
-from app.api.endpoints import auth, chamados, usuarios, comentarios, setores, categorias, historico, diagnostico, eventos, sla_configs, tarefas_recorrentes
+from app.api.endpoints import auth, chamados, usuarios, comentarios, setores, categorias, historico, diagnostico, eventos, health, sla_configs, tarefas_recorrentes
 
 # Docs só em desenvolvimento. openapi_url precisa cair junto: sem isso,
 # /openapi.json continuaria servindo o mapa completo da API e o bloqueio
@@ -116,6 +116,15 @@ app.include_router(
     dependencies=[Depends(require_admin)],
 )
 
+# Saúde da API. Único router de /api/v1 sem autenticação: a faixa de status do
+# frontend aparece antes do login, e monitor externo não tem credencial. O que
+# ele devolve é um contrato fechado de três campos — ver a docstring do módulo.
+app.include_router(
+    health.router,
+    prefix="/api/v1",
+    tags=["Saúde"],
+)
+
 # Trilha de auditoria dos cadastros (usuários e setores).
 #
 # Router próprio, e não uma rota dentro de /usuarios, por duas razões: a
@@ -153,7 +162,14 @@ app.include_router(
 # /api/v1 não exigir get_current_user. É o que impede que um endpoint novo
 # entre desprotegido por esquecimento: em vez de virar um buraco silencioso
 # em produção, a aplicação não sobe.
-ROTAS_PUBLICAS = {("POST", "/api/v1/auth/login")}
+ROTAS_PUBLICAS = {
+    ("POST", "/api/v1/auth/login"),
+    # Saúde: a faixa de status do frontend precisa dele antes do login, e um
+    # monitor externo não tem credencial. É público de propósito, e por isso a
+    # resposta é um contrato fechado que não devolve nada sobre o ambiente —
+    # ver app/api/endpoints/health.py.
+    ("GET", "/api/v1/health"),
+}
 
 
 def _rotas_desprotegidas() -> list[str]:
