@@ -385,35 +385,35 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   (`ADD COLUMN IF NOT EXISTS`); sem reversão automática — o rollback é o backup.
   Marcar as contas de serviço é um `UPDATE` separado, comentado no fim do
   arquivo, para ser rodado depois de conferir os nomes.
-- **Migration `migrations/2026-08-12-add-eventos-de-conta.sql`**: aplicar
-  **antes** de subir a imagem. Todo `POST`/`PUT`/`DELETE` de usuário passa a
-  gravar na tabela nova — com o banco antigo, o código novo derruba a edição de
-  cadastro inteira. É `CREATE TABLE` puro: aditivo, não toca em dado existente
-  e é idempotente (`IF NOT EXISTS`). Aplicar antes é seguro mesmo que o deploy
-  atrase, e rollback da imagem depois também — tabela vazia que ninguém lê não
-  muda o comportamento do que está no ar. Nada a configurar no Easypanel.
+- ~~**Migration `migrations/2026-08-12-add-eventos-de-conta.sql`**~~ — **JÁ
+  APLICADA em 12/08/2026**, à mão pelo DBeaver. Não precisa rodar de novo (e
+  rodar não faria mal: é `CREATE TABLE IF NOT EXISTS`).
 
-  A trilha começa do deploy em diante; o que aconteceu antes não é
-  recuperável, porque não existe fonte de onde reconstruir.
+  **A tabela está vazia em produção, e isso é o esperado.** Ela foi criada antes
+  do código que escreve nela, que é o do passo 2 e ainda não subiu. Zero linhas
+  significa "a imagem nova ainda não foi para o ar", não defeito — foi
+  exatamente esta a dúvida que custou uma investigação em 12/08. A trilha começa
+  a encher no deploy da imagem, e o que aconteceu antes não é recuperável,
+  porque não existe fonte de onde reconstruir.
+
+  Aplicar adiantado era seguro por construção, e continua sendo: tabela vazia
+  que ninguém lê não muda o comportamento da API que está no ar, e rollback da
+  imagem depois também não.
 - **Migration `migrations/2026-08-12-add-eventos-de-setor.sql`**: aplicar
   **antes** de subir a imagem, pelos mesmos motivos da de cima — todo
   `POST`/`PUT`/`PATCH`/`DELETE` de setor passa a gravar nela, e com o banco
   antigo o código novo derruba a edição de setor inteira. `CREATE TABLE` puro,
   idempotente, sem nada a configurar no Easypanel.
 
-- **ORDEM DAS DUAS MIGRATIONS.** São duas, e nenhuma delas rodou em produção
-  ainda: `2026-08-12-add-eventos-de-conta.sql` foi escrita na entrega anterior
-  e ficou esperando este deploy. Rodar as duas, uma de cada vez, **antes** de
-  subir a imagem:
+- **ORDEM DO DEPLOY: uma migration pendente, não duas.**
 
-  1. `migrations/2026-08-12-add-eventos-de-conta.sql`
-  2. `migrations/2026-08-12-add-eventos-de-setor.sql`
-  3. subir a imagem
+  1. `migrations/2026-08-12-add-eventos-de-setor.sql` — a única que falta
+  2. subir a imagem
+  3. apontar o healthcheck do Easypanel para `/health`
 
-  A ordem entre 1 e 2 não é dependência técnica — as tabelas não se
-  referenciam — é só para conferir o resultado de cada uma isoladamente; cada
-  arquivo termina com as consultas de verificação. Subir a imagem sem uma delas
-  quebra o cadastro correspondente na primeira gravação.
+  A de `eventos_de_conta` já foi aplicada em 12/08 (ver acima). Subir a imagem
+  sem a de setor quebra a edição de setor na primeira gravação; o arquivo termina
+  com as consultas de verificação.
 
 - **Nenhuma rota mudou de comportamento nesta versão**, então o frontend atual
   continua funcionando sem ajuste: `DELETE` de usuário e de setor respondem
@@ -425,6 +425,24 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   apagar de verdade, e o de usuário sairá de cena. Esse é o único passo que
   quebra cliente, e só acontece depois que o frontend migrar para os `PATCH`.
   A consulta de `origem` acima é o que diz quando isso é seguro.
+- **`GET /api/v1/health`: API ANTES DO FRONTEND 1.4.1.** Não é urgente, mas tem
+  ordem. A faixa de status da 1.4.1 consome este endpoint; com a API antiga em
+  produção, ela recebe 404 e **nasce dizendo "fora do ar" com o sistema no ar** —
+  o oposto exato do que ela existe para fazer, e pior do que não ter faixa.
+
+  Rota nova, sem migration, sem nada a configurar: pode subir junto com a
+  fundação visual, desde que a API vá primeiro. A ordem inversa é segura em
+  outro sentido — API nova com frontend antigo não incomoda ninguém, porque
+  quem não chama o endpoint não percebe que ele existe.
+
+- **Healthcheck do Easypanel: apontar para `/health`**, o caminho **sem** banco,
+  e não para o `/api/v1/health` novo. Se o Easypanel reinicia o serviço quando o
+  healthcheck falha, essa é a única opção segura — banco fora não se conserta
+  reiniciando a API, e a queda do Postgres viraria ciclo de restart. Se ele
+  apenas alerta, o que se perde é detalhe que a faixa de status do frontend
+  mostra de qualquer forma. Nas duas hipóteses `/health` é a escolha certa.
+  Tabela dos dois caminhos em `DEPLOY.md`.
+
 - **`PATCH /chamados/{id}/avaliar`**: subir a API **antes** de ligar o widget
   de estrelas no frontend. Rota nova, sem migration — a ordem inversa faria o
   front chamar um caminho que ainda devolve 404. Nada a configurar.

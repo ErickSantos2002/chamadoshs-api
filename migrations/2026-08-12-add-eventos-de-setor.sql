@@ -7,11 +7,14 @@
 -- escrever aqui — com o banco antigo, o código novo derruba a edição de setor
 -- inteira.
 --
--- ATENÇÃO À ORDEM: esta migration é a SEGUNDA. A de `eventos_de_conta`
--- (2026-08-12-add-eventos-de-conta.sql) foi escrita no passo anterior e ainda
--- não rodou em produção — as duas precisam ser aplicadas, nesta ordem, antes de
--- a imagem nova subir. A ordem entre elas não é uma dependência técnica (as
--- tabelas não se referenciam), é só para conferir uma de cada vez.
+-- ESTA É A ÚNICA MIGRATION PENDENTE. A de `eventos_de_conta`
+-- (2026-08-12-add-eventos-de-conta.sql), do passo anterior, já foi aplicada em
+-- 12/08/2026, à mão pelo DBeaver. As duas são independentes — não se
+-- referenciam — então não há ordem a respeitar entre elas.
+--
+-- Se `eventos_de_conta` estiver vazia no banco, está certo: ela foi criada
+-- antes do código que escreve nela, que é o desta entrega e ainda não subiu.
+-- Zero linhas ali significa "a imagem nova não foi para o ar", não defeito.
 --
 -- É `CREATE TABLE` puro — aditivo, não toca em dado existente. Rodar com o
 -- deploy atrasado é seguro: tabela vazia que ninguém lê não muda o

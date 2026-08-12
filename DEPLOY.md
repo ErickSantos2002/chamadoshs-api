@@ -129,15 +129,18 @@ python -c "import secrets; print(secrets.token_hex(32))"
 - Exemplo: `api.chamadoshs.com`
 
 #### Health Check
-- **Path**: `/api/v1/health`
+- **Path**: `/health`
 - **Port**: `8000`
 
-Existem dois caminhos de saúde, e eles respondem perguntas diferentes:
+**Sim, `/health` — o sem banco.** Não é o endpoint mais informativo dos dois, e
+é essa a intenção.
+
+Existem dois caminhos de saúde, respondendo perguntas diferentes:
 
 | Caminho | Verifica | Quem usa | O que fazer quando falha |
 |---|---|---|---|
-| `/health` | só se a API responde | `HEALTHCHECK` do Dockerfile | reiniciar o contêiner |
-| `/api/v1/health` | API **e** banco (`SELECT 1`) | Easypanel e monitoramento | avisar alguém |
+| `/health` | só se a API responde | `HEALTHCHECK` do Dockerfile **e Easypanel** | reiniciar o contêiner |
+| `/api/v1/health` | API **e** banco (`SELECT 1`) | a faixa de status do frontend | avisar alguém |
 
 A separação é a diferença entre *liveness* e *readiness*, e importa no
 incidente: **banco fora não se conserta reiniciando a API.** Se o healthcheck
@@ -146,10 +149,12 @@ colocaria a API em ciclo de restart, e a resposta "API no ar, banco fora" —
 que é a informação útil naquele momento, e o motivo de o endpoint existir —
 desapareceria junto.
 
-Se o Easypanel usar o healthcheck configurado aqui para **reiniciar** o serviço
-(e não apenas para alertar), aponte-o para `/health` e monitore
-`/api/v1/health` por fora, com um monitor externo. Vale conferir esse
-comportamento antes de confiar na configuração.
+Por que `/health` no Easypanel sem depender de descobrir se ele reinicia ou só
+alerta: **se reinicia, é a única opção segura**; se apenas alerta, o que se
+perde é um detalhe que a faixa de status do frontend mostra de qualquer forma,
+consumindo `/api/v1/health` direto. Nas duas hipóteses `/health` é a escolha
+certa, então a pergunta não precisa de resposta. O Easypanel fica com o teste
+de vida, e o frontend com o monitor que enxerga o banco.
 
 Respostas de `/api/v1/health`:
 
