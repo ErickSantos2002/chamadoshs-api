@@ -112,12 +112,41 @@ class TestBancoFora:
         assert corpo["status"] == "degradado"
         assert corpo["banco"] == "erro"
 
-    def test_o_status_http_basta_sem_ler_o_corpo(self, cliente, banco_fora):
+    def test_e_503_exato_e_nao_um_5xx_qualquer(self, cliente, banco_fora):
         """
-        Por que 503 e não 200 com `status: degradado`: todo monitoramento que
-        olha só o código — incluindo o do Easypanel — veria saúde onde não há.
+        **Este é o teste que protege o contrato com o frontend.**
+
+        A faixa de status lê o CÓDIGO, nunca o corpo, e o traduz assim:
+
+            200          -> "sistema ativo"
+            503          -> "banco fora"
+            outro / erro -> "sem resposta"
+
+        A terceira linha é a que torna `>= 500` insuficiente, que era a
+        asserção daqui: um 500 no lugar do 503 continuaria passando e mudaria
+        em silêncio o que a tela diz — "banco fora" viraria "sem resposta". E o
+        front está certo em fazer assim, porque num 500 ou 502 quem respondeu
+        pode nem ter sido a API, e afirmar "o banco caiu" a partir de um 502 do
+        proxy seria inventar diagnóstico.
+
+        Consequência para quem mexer aqui: **mudar este código de status é
+        mudar a interface**, e exige avisar quem cuida do frontend. O contrato
+        do corpo, travado em `TestNaoServeParaReconhecimento`, é uma trava de
+        segurança; esta é a de compatibilidade.
         """
-        assert cliente.get(CAMINHO).status_code >= 500
+        resposta = cliente.get(CAMINHO)
+
+        assert resposta.status_code == 503, (
+            f"o frontend traduz 503 como 'banco fora' e qualquer outro 5xx como "
+            f"'sem resposta'; este endpoint respondeu {resposta.status_code}"
+        )
+
+    def test_saudavel_e_200_exato(self, cliente):
+        """
+        A outra ponta do mesmo contrato: só 200 vira "sistema ativo". Um 204 ou
+        um 302 aqui apagariam a faixa sem que nada falhasse do lado da API.
+        """
+        assert cliente.get(CAMINHO).status_code == 200
 
     def test_a_mensagem_do_driver_nao_vaza_no_corpo(self, cliente, banco_fora):
         """

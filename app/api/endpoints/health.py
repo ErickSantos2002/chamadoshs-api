@@ -23,6 +23,42 @@ caiu" (não houve resposta) de "API no ar, banco fora" (503 com corpo). Um 200
 carregando a palavra "degradado" faz as duas coisas dependerem de o cliente ler
 o corpo — e todo monitoramento que olha só o código de status, incluindo o do
 Easypanel, veria saúde onde não há.
+
+--------------------------------------------------------------------------
+O QUE É INTERFACE AQUI: O CÓDIGO DE STATUS
+--------------------------------------------------------------------------
+
+A faixa de status do frontend (1.4.1 em diante) lê **só o código**, nunca o
+corpo, e o traduz assim:
+
+    200          -> "sistema ativo"
+    503          -> "banco fora"
+    outro / erro -> "sem resposta"
+
+A terceira linha existe porque num 500, 502 ou 504 quem respondeu pode nem ter
+sido esta aplicação: afirmar "o banco caiu" a partir de um 502 do proxy seria
+inventar diagnóstico. É a leitura certa, e ela tem uma consequência para quem
+edita este arquivo.
+
+**Trocar 503 por outro 5xx não é detalhe de implementação — muda o que a tela
+diz.** "Banco fora" viraria "sem resposta", sem nada falhar deste lado. O
+mesmo vale para o 200: um 204 apagaria a faixa. Mexer em qualquer um dos dois
+exige avisar quem cuida do frontend, que é outra sessão de trabalho.
+
+Os dois códigos têm teste dedicado em `tests/test_health.py`
+(`test_e_503_exato_e_nao_um_5xx_qualquer` e `test_saudavel_e_200_exato`),
+justamente para a mudança falhar antes de chegar à tela.
+
+O contrato do CORPO é outra coisa, e protege outro risco: não vazar nada num
+endpoint público. Os dois convivem — corpo fechado por segurança, código de
+status fechado por compatibilidade.
+
+--------------------------------------------------------------------------
+
+**Carga esperada:** uma consulta por minuto, por aba aberta, por pessoa — o
+front pausa com a aba oculta e refaz ao voltar — com timeout de 5s do lado
+dele. É o que "barato o suficiente" precisa suportar aqui, e por isso a
+verificação é um `SELECT 1` e não uma agregação.
 """
 
 import logging
