@@ -16,7 +16,10 @@ faz o último dia do período sumir, e o dia que mais se filtra é o de hoje.
 
 from datetime import date, datetime, timedelta
 
+from sqlalchemy import event
+
 from app.models import EventoDeConta, EventoDeSetor, Setor
+from app.services import trilha_service
 
 
 def _como_admin(autenticar, dados):
@@ -124,6 +127,27 @@ class TestPainelDaConta:
         ).json()
 
         assert [e["id"] for e in eventos] == [3]
+
+    def test_limite_fora_da_faixa_e_recusado(self, cliente, dados, sessao, autenticar):
+        """
+        O caso que a suíte não tinha como acusar sozinha: `limit` chega cru no
+        `.limit()` do SQLAlchemy, e `LIMIT -1` no PostgreSQL é erro — 500 vindo
+        de query string. No SQLite destes testes, `LIMIT -1` significa SEM
+        LIMITE, então a resposta era 200 com a trilha inteira: nem o erro de
+        produção nem o limite pedido, e nada falhando.
+
+        A rota irmã (`GET /eventos`) já recusava; esta ficou para trás quando o
+        piso foi acrescentado lá.
+        """
+        _semear(sessao, dados)
+        headers = _como_admin(autenticar, dados)
+        caminho = f"/api/v1/usuarios/{dados['comum_id']}/eventos"
+
+        assert cliente.get(f"{caminho}?limit=-1", headers=headers).status_code == 422
+        assert cliente.get(f"{caminho}?limit=0", headers=headers).status_code == 422
+        assert cliente.get(f"{caminho}?limit=99999", headers=headers).status_code == 422
+        # E o caminho normal continua respondendo.
+        assert cliente.get(f"{caminho}?limit=1", headers=headers).status_code == 200
 
     def test_conta_inexistente_devolve_404(self, cliente, dados, autenticar):
         """
@@ -278,13 +302,42 @@ class TestListagemGeral:
         aceita índice negativo contando do fim: `skip=-5` devolveria as linhas
         mais ANTIGAS numa consulta que promete as mais recentes, sem erro
         nenhum. 422 é a resposta certa para parâmetro fora da faixa.
+
+        O teto de `skip` protege outra coisa: `skip + limit` vira o `LIMIT` das
+        duas tabelas, e tudo que voltar é materializado nesta máquina antes do
+        corte. É o preço de mesclar fora do banco, e ele cresce junto com a
+        trilha.
         """
         _semear(sessao, dados)
         headers = _como_admin(autenticar, dados)
 
         assert cliente.get("/api/v1/eventos/?skip=-5", headers=headers).status_code == 422
+        assert cliente.get("/api/v1/eventos/?skip=50000000", headers=headers).status_code == 422
         assert cliente.get("/api/v1/eventos/?limit=0", headers=headers).status_code == 422
+        assert cliente.get("/api/v1/eventos/?limit=-1", headers=headers).status_code == 422
         assert cliente.get("/api/v1/eventos/?limit=99999", headers=headers).status_code == 422
+
+    def test_data_maxima_nao_derruba_a_consulta(self, cliente, dados, sessao, autenticar):
+        """
+        `9999-12-31` é `date.max` e não tem dia seguinte: o cálculo do limite
+        superior levantava `OverflowError`, que não é `ValueError` e escapava do
+        tratamento do handler como 500 — a partir de query string.
+
+        A data máxima significa "até o fim dos tempos", então o esperado é a
+        trilha inteira, e não erro.
+        """
+        _semear(sessao, dados)
+        headers = _como_admin(autenticar, dados)
+
+        resposta = cliente.get("/api/v1/eventos/?ate=9999-12-31", headers=headers)
+
+        assert resposta.status_code == 200
+        assert len(resposta.json()) == 4
+
+        # O outro endpoint passa pelo mesmo cálculo e não tinha guarda nenhuma.
+        assert cliente.get(
+            f"/api/v1/usuarios/{dados['comum_id']}/eventos?ate=9999-12-31", headers=headers
+        ).status_code == 200
 
     def test_setor_apagado_continua_legivel_na_listagem(
         self, cliente, dados, sessao, autenticar
@@ -317,6 +370,59 @@ class TestListagemGeral:
         _semear(sessao, dados)
 
         assert cliente.get("/api/v1/eventos/").status_code == 401
+
+
+class TestOrdenacaoNoBancoBateComAMescla:
+    """
+    A trava que o comportamento não pega, e que só existe porque o banco de
+    produção não é o dos testes.
+
+    No PostgreSQL, `ORDER BY x DESC` implica **NULLS FIRST**. O `_ordem` da
+    mescla em Python faz o oposto — manda nulos para o fim. Com as duas
+    discordando, uma linha de `created_at` nulo ocuparia o começo da janela do
+    `LIMIT` no banco e o fim da lista depois da mescla: a consulta engoliria em
+    silêncio a mesma quantidade de eventos genuinamente recentes, enquanto
+    promete "do mais recente para o mais antigo".
+
+    O SQLite ordena nulos por último em `DESC`, então um teste de
+    comportamento passaria com ou sem a correção. Por isso a asserção é sobre o
+    SQL emitido.
+    """
+
+    def _sql_emitido(self, sessao, executar):
+        emitido = []
+
+        def _captura(conn, cursor, statement, parametros, contexto, executemany):
+            emitido.append(statement)
+
+        engine = sessao.get_bind()
+        event.listen(engine, "before_cursor_execute", _captura)
+        try:
+            executar()
+        finally:
+            event.remove(engine, "before_cursor_execute", _captura)
+        return emitido
+
+    def test_a_consulta_de_contas_pede_nulls_last(self, sessao, dados):
+        emitido = self._sql_emitido(
+            sessao, lambda: trilha_service.eventos_de_conta(sessao, limite=10)
+        )
+
+        alvo = [s for s in emitido if "eventos_de_conta" in s]
+        assert alvo, "nenhuma consulta a eventos_de_conta foi emitida"
+        assert all("NULLS LAST" in s.upper() for s in alvo), (
+            "a ordenação no banco voltou ao padrão do PostgreSQL (NULLS FIRST) "
+            "e passou a discordar da mescla em Python"
+        )
+
+    def test_a_consulta_de_setores_pede_nulls_last(self, sessao, dados):
+        emitido = self._sql_emitido(
+            sessao, lambda: trilha_service.eventos_de_setor(sessao, limite=10)
+        )
+
+        alvo = [s for s in emitido if "eventos_de_setor" in s]
+        assert alvo, "nenhuma consulta a eventos_de_setor foi emitida"
+        assert all("NULLS LAST" in s.upper() for s in alvo)
 
 
 class TestLeituraEnxergaOQueAsRotasGravam:

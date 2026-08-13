@@ -165,7 +165,12 @@ def listar_eventos_do_usuario(
     usuario_id: int,
     de: date = None,
     ate: date = None,
-    limit: int = Query(100, le=500),
+    # ge=1 pelo mesmo motivo do irmão em eventos.py, e a falta dele aqui era
+    # pior do que parece: `limit` chega cru no `.limit()` do SQLAlchemy, e
+    # `LIMIT -1` no PostgreSQL é erro — 500 a partir de query string. No SQLite
+    # dos testes, `LIMIT -1` significa SEM LIMITE, então a suíte via 200 com a
+    # trilha inteira e não tinha como acusar nada.
+    limit: int = Query(100, ge=1, le=500),
     _admin: Usuario = Depends(require_admin),
     db: Session = Depends(get_db),
 ):

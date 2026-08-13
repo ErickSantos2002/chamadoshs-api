@@ -20,11 +20,21 @@ def listar_eventos(
     ator_id: Optional[int] = Query(None, description="Quem praticou a ação"),
     de: Optional[date] = Query(None, description="Primeiro dia do período (inclusivo)"),
     ate: Optional[date] = Query(None, description="Último dia do período (inclusivo)"),
-    # ge=0 e ge=1 não são zelo: a mescla das duas tabelas termina num
-    # `juntos[skip : skip + limit]`, e slice de Python aceita índice negativo
-    # contando do fim. Um `skip=-5` devolveria silenciosamente o rabo da lista
-    # — as linhas mais ANTIGAS — numa consulta que promete as mais recentes.
-    skip: int = Query(0, ge=0),
+    # `skip` tem as duas pontas limitadas, e cada uma protege de uma coisa.
+    #
+    # ge=0: a mescla termina num `juntos[skip : skip + limit]`, e slice de
+    # Python aceita índice negativo contando do fim. Um `skip=-5` devolveria
+    # silenciosamente as linhas mais ANTIGAS numa consulta que promete as mais
+    # recentes.
+    #
+    # le: `skip + limit` vira o `LIMIT` das DUAS tabelas, e tudo que voltar é
+    # materializado como dicionário nesta máquina antes do corte. É o preço de
+    # mesclar fora do banco, e ele cresce junto com a trilha — que é uma tabela
+    # feita para nunca ser podada. Sem teto, `?skip=50000000` manda o banco
+    # varrer tudo que existir e o processo montar dicionário de cada linha.
+    # 10 mil é fundo de sobra para navegação de tela; auditoria que precise ir
+    # além disso pede filtro (`de`/`ate`/`ator_id`), não página 200.
+    skip: int = Query(0, ge=0, le=10_000),
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
 ):

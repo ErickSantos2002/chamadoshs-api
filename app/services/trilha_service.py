@@ -16,6 +16,7 @@ vocabulário de `acao`.
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 
+from sqlalchemy import nulls_last
 from sqlalchemy.orm import Session, aliased
 
 from app.models.evento_conta import EventoDeConta
@@ -35,9 +36,20 @@ def _intervalo(de: Optional[date], ate: Optional[date]):
     `created_at <= ate` com `ate` em data pura significaria meia-noite em ponto,
     e o filtro devolveria zero eventos do último dia do período — o mesmo
     filtro que a pessoa acabou de usar para procurar o que aconteceu hoje.
+
+    `ate = 9999-12-31` (o `date.max`) não tem dia seguinte: somar um dia
+    levanta `OverflowError`, que **não** é `ValueError` e portanto escapava do
+    tratamento do handler como 500 — a partir de query string, que é o tipo de
+    entrada em que 500 é a resposta errada. A data máxima significa "até o fim
+    dos tempos", e é exatamente isso que a ausência de limite superior expressa.
     """
     inicio = datetime.combine(de, time.min) if de else None
-    fim = datetime.combine(ate + timedelta(days=1), time.min) if ate else None
+
+    if ate is None or ate >= date.max:
+        fim = None
+    else:
+        fim = datetime.combine(ate + timedelta(days=1), time.min)
+
     return inicio, fim
 
 
@@ -137,7 +149,17 @@ def eventos_de_conta(
     consulta = _aplicar_periodo(consulta, EventoDeConta.created_at, de, ate)
 
     linhas = (
-        consulta.order_by(EventoDeConta.created_at.desc(), EventoDeConta.id.desc())
+        consulta.order_by(
+            # nulls_last explícito: no PostgreSQL, `DESC` implica NULLS FIRST,
+            # e `_ordem` faz o contrário. A divergência não é estética — as
+            # linhas com `created_at` nulo ocupariam o começo da janela do
+            # `LIMIT`, e a mescla em Python as jogaria para o fim, então a
+            # consulta engoliria em silêncio a mesma quantidade de eventos
+            # genuinamente recentes. O SQLite dos testes já ordena nulos por
+            # último, então a suíte não veria diferença.
+            nulls_last(EventoDeConta.created_at.desc()),
+            EventoDeConta.id.desc(),
+        )
         .limit(limite)
         .all()
     )
@@ -167,7 +189,10 @@ def eventos_de_setor(
     consulta = _aplicar_periodo(consulta, EventoDeSetor.created_at, de, ate)
 
     linhas = (
-        consulta.order_by(EventoDeSetor.created_at.desc(), EventoDeSetor.id.desc())
+        # Mesmo nulls_last do irmão de contas, pelo mesmo motivo.
+        consulta.order_by(
+            nulls_last(EventoDeSetor.created_at.desc()), EventoDeSetor.id.desc()
+        )
         .limit(limite)
         .all()
     )
