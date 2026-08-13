@@ -415,6 +415,17 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   sem a de setor quebra a edição de setor na primeira gravação; o arquivo termina
   com as consultas de verificação.
 
+- **Depois do deploy, para liberar os passos 3 e 4:**
+  `docs/medir-migracao-do-frontend.sql`. São cinco `SELECT`s que respondem, pela
+  coluna `origem` das trilhas, se o frontend ainda chama os `DELETE` antigos —
+  a pergunta que decide se aqueles passos podem acontecer sem quebrar cliente.
+  A resposta precisa ser medida, não lembrada: são três abas do front, e basta
+  uma ter passado despercebida.
+
+  Não rodar logo depois do deploy esperando conclusão: a trilha registra do
+  deploy em diante, então vazio ali significa "ainda não sei", e não "migrou".
+  A quinta consulta serve para separar os dois casos.
+
 - **Nenhuma rota mudou de comportamento nesta versão**, então o frontend atual
   continua funcionando sem ajuste: `DELETE` de usuário e de setor respondem
   como sempre responderam. As rotas novas (`PATCH .../desativar`,
