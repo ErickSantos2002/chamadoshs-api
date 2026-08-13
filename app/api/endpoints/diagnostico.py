@@ -1,3 +1,27 @@
+"""
+Relatório administrativo do estado do sistema. Restrito a administrador (o
+router inteiro, em main.py).
+
+**Não confundir com `GET /api/v1/health`.** Os dois olham para o banco e param
+de se parecer aí:
+
+    /api/v1/health      público, um SELECT 1, chamado a cada 60s pela faixa de
+                        status do frontend. Contrato fechado de três campos.
+    /api/v1/diagnostico só administrador, conta usuários, lê information_schema
+                        e monta amostra. Ferramenta de investigação, cara por
+                        resposta, feita para ser aberta quando algo deu errado.
+
+**As mensagens de exceção não entram na resposta.** Um `OperationalError` do
+psycopg2 traz host, porta, usuário e nome do banco no texto. Aqui isso é menos
+grave do que seria num endpoint público — quem lê já é administrador — mas
+continua sendo detalhe de infraestrutura viajando por HTTP e parando em log de
+proxy, histórico de navegador e print colado em conversa. O texto vai para o
+log da aplicação, onde o acesso já é controlado, e a resposta diz o que falhou
+sem dizer onde mora.
+"""
+
+import logging
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -5,6 +29,8 @@ from sqlalchemy import text
 from app.api.deps import get_db
 from app.models.usuario import Usuario
 from app.models.role import Role
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -25,8 +51,9 @@ def diagnostico_geral(db: Session = Depends(get_db)):
         # 1. Verificar conexão com banco
         db.execute(text("SELECT 1"))
         diagnostico["database"]["conexao"] = "✅ OK"
-    except Exception as e:
-        diagnostico["database"]["conexao"] = f"❌ ERRO: {str(e)}"
+    except Exception:
+        logger.error("Diagnóstico: conexão com o banco falhou", exc_info=True)
+        diagnostico["database"]["conexao"] = "❌ ERRO na conexão (detalhe no log da aplicação)"
         diagnostico["status"] = "erro"
 
     try:
@@ -42,8 +69,9 @@ def diagnostico_geral(db: Session = Depends(get_db)):
         else:
             diagnostico["auth"]["migration_executada"] = "❌ FALTA - Execute migrations/add_auth_fields.sql"
             diagnostico["status"] = "erro"
-    except Exception as e:
-        diagnostico["auth"]["migration_executada"] = f"❌ ERRO: {str(e)}"
+    except Exception:
+        logger.error("Diagnóstico: leitura de information_schema falhou", exc_info=True)
+        diagnostico["auth"]["migration_executada"] = "❌ ERRO ao verificar (detalhe no log da aplicação)"
         diagnostico["status"] = "erro"
 
     try:
@@ -99,8 +127,9 @@ def diagnostico_geral(db: Session = Depends(get_db)):
 
         diagnostico["alertas"] = alertas
 
-    except Exception as e:
-        diagnostico["usuarios"]["erro"] = f"❌ ERRO: {str(e)}"
+    except Exception:
+        logger.error("Diagnóstico: consulta de usuários falhou", exc_info=True)
+        diagnostico["usuarios"]["erro"] = "❌ ERRO ao consultar (detalhe no log da aplicação)"
         diagnostico["status"] = "erro"
 
     return diagnostico
