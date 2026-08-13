@@ -132,13 +132,15 @@ app.include_router(
 # e `/usuarios/eventos` conviveria com `/usuarios/{usuario_id}` dependendo da
 # ordem de declaração para não ser engolida pelo path int.
 #
-# Restrito a administrador no router inteiro, como diagnóstico: a trilha diz
-# quem fez o quê com a conta de quem.
+# A restrição de perfil NÃO fica aqui, e isso é exceção deliberada ao padrão
+# desta tela: administrador vê a trilha inteira e técnico vê apenas eventos de
+# setor, que é o cadastro que ele administra. Uma dependency de router só sabe
+# dizer "entra ou não entra" — a distinção depende do parâmetro `alvo` da
+# requisição, então mora no handler, junto com a explicação.
 app.include_router(
     eventos.router,
     prefix="/api/v1/eventos",
     tags=["Auditoria"],
-    dependencies=[Depends(require_admin)],
 )
 
 app.include_router(

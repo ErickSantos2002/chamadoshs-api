@@ -91,12 +91,27 @@ class TestApagaDeVerdade:
 
         assert resposta.status_code == 404
 
-    def test_e_restrito_a_administrador(self, cliente, dados, sessao, autenticar):
+    def test_tecnico_pode_excluir(self, cliente, dados, sessao, autenticar):
+        """
+        Setor passou a ser cadastro de técnico em 13/08/2026. A trilha registra
+        quem apagou, então a rastreabilidade não depende do perfil.
+        """
         setor_id = _setor(sessao)
 
         resposta = cliente.delete(
             f"/api/v1/setores/{setor_id}",
             headers=autenticar(dados["tecnico_id"], "tecnico.teste", "Tecnico"),
+        )
+
+        assert resposta.status_code == 204
+        assert not _existe(sessao, setor_id)
+
+    def test_usuario_comum_nao_pode(self, cliente, dados, sessao, autenticar):
+        setor_id = _setor(sessao)
+
+        resposta = cliente.delete(
+            f"/api/v1/setores/{setor_id}",
+            headers=autenticar(dados["comum_id"], "usuario.teste", "Usuario"),
         )
 
         assert resposta.status_code == 403

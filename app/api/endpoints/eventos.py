@@ -4,7 +4,8 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_db, is_admin, require_staff
+from app.models.usuario import Usuario
 from app.schemas.evento import EventoResponse
 from app.services import trilha_service
 
@@ -36,6 +37,7 @@ def listar_eventos(
     # além disso pede filtro (`de`/`ate`/`ator_id`), não página 200.
     skip: int = Query(0, ge=0, le=10_000),
     limit: int = Query(100, ge=1, le=500),
+    autor: Usuario = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
     """
@@ -50,7 +52,31 @@ def listar_eventos(
     O período é em dias e os dois extremos entram. `ate=2026-08-12` inclui o dia
     12 até o fim, não até a meia-noite dele — que é o que devolveria uma lista
     vazia para quem filtra o dia corrente.
+
+    **Técnico vê apenas eventos de SETOR.** Ele passou a administrar setores,
+    categorias e SLA, e audita o que administra — mas eventos de conta dizem
+    quem redefiniu a senha de quem, quem promoveu quem a administrador e quem
+    desativou quem, e isso fica com o administrador.
+
+    A separação é por tipo de alvo, e não por endpoint, porque endpoint não
+    separa nada aqui: esta rota devolve exatamente os mesmos eventos de conta
+    que `GET /usuarios/{id}/eventos`, só que de todas as contas de uma vez.
+    Proteger lá e liberar aqui deixaria a restrição decorativa — a informação
+    sairia pela porta ao lado, que é a forma exata do defeito que o passo 0
+    fechou entre o `DELETE` e o `PUT`.
     """
+    if not is_admin(autor):
+        if alvo is None:
+            # Sem alvo, o padrão seria "os dois". Para técnico isso vira
+            # "só setor" em vez de 403: o pedido é legítimo, e recusá-lo
+            # obrigaria a tela a saber o perfil para montar a query.
+            alvo = trilha_service.ALVO_SETOR
+        elif alvo != trilha_service.ALVO_SETOR:
+            raise HTTPException(
+                status_code=403,
+                detail="Requer perfil: Administrador para ver eventos de conta",
+            )
+
     try:
         return trilha_service.consultar(
             db, alvo=alvo, ator_id=ator_id, de=de, ate=ate, skip=skip, limit=limit

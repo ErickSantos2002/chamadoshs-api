@@ -12,6 +12,48 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Alterado — permissões
+- **Técnico passa a administrar setores, categorias e prazos de SLA**, e a
+  auditar o cadastro que administra. Antes tudo isso exigia administrador.
+
+  | Rota | Antes | Agora |
+  |---|---|---|
+  | `POST`/`PUT`/`PATCH`/`DELETE` `/setores/…` | admin | admin **ou técnico** |
+  | `POST`/`PUT`/`DELETE` `/categorias/…` | admin | admin **ou técnico** |
+  | `PUT /sla-configs/{prioridade}` | admin | admin **ou técnico** |
+  | `GET /eventos` | admin | admin, **e técnico só com `alvo=setor`** |
+
+  **Contas de usuário continuam exclusivas do administrador**, e não é
+  hierarquia: editar usuário inclui editar `role_id`, então um técnico com
+  `PUT /usuarios/{id}` se promove a administrador em uma requisição. É o mesmo
+  escalonamento que o passo 0 fechou por outro caminho — uma rota que parece de
+  edição comum carregando o poder de mudar quem manda.
+
+  **`GET /eventos` para técnico é limitado por `alvo`, não liberado inteiro.**
+  A restrição pedida era manter `GET /usuarios/{id}/eventos` com o
+  administrador, "porque ela diz quem redefiniu a senha de quem" — mas
+  `GET /eventos?alvo=usuario` devolve exatamente os mesmos eventos, de todas as
+  contas de uma vez. Liberar um e proteger o outro deixaria a proteção
+  decorativa, com a informação saindo pela porta ao lado. A separação passou a
+  ser por **tipo de alvo**, que é o que de fato distingue o sensível do resto:
+  técnico vê eventos de setor, administrador vê tudo.
+
+  Omitir `alvo` como técnico devolve só os de setor, em vez de 403: o pedido é
+  legítimo, e recusá-lo obrigaria a tela a saber o perfil só para montar a
+  query.
+
+  A dependency saiu do router e foi para o handler, exceção deliberada ao
+  padrão de `main.py` — dependency de router só sabe dizer "entra ou não
+  entra", e aqui a decisão depende de um parâmetro da requisição.
+
+  `/api/v1/diagnostico/` **não** entrou na liberação: enumera contas e diz
+  quais estão sem senha, o que é mapa de onde entrar, não ferramenta de
+  cadastro.
+
+  24 testes em `tests/test_politica_de_perfis.py`, cada permissão com o par
+  "pode" e "não pode" — uma trava verificada só pelo lado da recusa passaria
+  também com uma API que recusa tudo.
+
 ### Alterado — mudança de contrato
 - **`DELETE /api/v1/setores/{id}` passou a EXCLUIR o setor.** Até aqui ele
   desativava, e essa era a última distância entre o que o verbo diz e o que o

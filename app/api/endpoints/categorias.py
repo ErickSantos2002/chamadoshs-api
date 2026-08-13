@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.api.deps import get_db, require_admin
+from app.api.deps import get_db, require_staff
 from app.models.categoria import Categoria
 from app.models.chamado import Chamado
 from app.models.usuario import Usuario
@@ -43,11 +43,11 @@ def buscar_categoria(categoria_id: int, db: Session = Depends(get_db)):
 @router.post("/", response_model=CategoriaResponse, status_code=status.HTTP_201_CREATED)
 def criar_categoria(
     categoria_data: CategoriaCreate,
-    _admin: Usuario = Depends(require_admin),
+    _autor: Usuario = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
     """
-    Cria uma nova categoria. Restrito a administrador.
+    Cria uma nova categoria. Restrito a administrador ou técnico.
     """
     categoria = Categoria(**categoria_data.model_dump())
     db.add(categoria)
@@ -60,11 +60,11 @@ def criar_categoria(
 def atualizar_categoria(
     categoria_id: int,
     categoria_data: CategoriaUpdate,
-    _admin: Usuario = Depends(require_admin),
+    _autor: Usuario = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
     """
-    Atualiza uma categoria existente. Restrito a administrador.
+    Atualiza uma categoria existente. Restrito a administrador ou técnico.
     """
     categoria = db.query(Categoria).filter(Categoria.id == categoria_id).first()
     if not categoria:
@@ -82,11 +82,11 @@ def atualizar_categoria(
 @router.delete("/{categoria_id}", status_code=status.HTTP_204_NO_CONTENT)
 def deletar_categoria(
     categoria_id: int,
-    _admin: Usuario = Depends(require_admin),
+    _autor: Usuario = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
     """
-    Exclui uma categoria. Restrito a administrador.
+    Exclui uma categoria. Restrito a administrador ou técnico.
 
     Só apaga se nenhum chamado estiver vinculado a ela — caso contrário devolve 400,
     porque apagar quebraria o histórico dos chamados (FK chamados.categoria_id).

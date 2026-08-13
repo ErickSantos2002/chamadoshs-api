@@ -3,7 +3,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_admin
+from app.api.deps import get_db, require_staff
 from app.models.sla_config import SLAConfig
 from app.models.usuario import Usuario
 from app.schemas.sla import SLAConfigResponse, SLAConfigUpdate
@@ -21,10 +21,10 @@ def listar_sla_configs(db: Session = Depends(get_db)):
 def atualizar_sla_config(
     prioridade: str,
     dados: SLAConfigUpdate,
-    _admin: Usuario = Depends(require_admin),
+    _autor: Usuario = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
-    """Atualiza os prazos de uma prioridade. Restrito a administrador."""
+    """Atualiza os prazos de uma prioridade. Restrito a administrador ou técnico."""
     config = db.query(SLAConfig).filter(SLAConfig.prioridade == prioridade).first()
     if not config:
         raise HTTPException(status_code=404, detail="Prioridade não encontrada")

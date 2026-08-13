@@ -211,10 +211,10 @@ curl -X POST "http://localhost:8000/api/v1/comentarios/" \
 - `GET /api/v1/setores/{id}` - Buscar setor por ID
 - `POST /api/v1/setores/` - Criar setor
 - `PUT /api/v1/setores/{id}` - Atualizar setor
-- `PATCH /api/v1/setores/{id}/desativar` - Desativar setor (admin; recusa se
-  houver usuário ativo vinculado)
-- `PATCH /api/v1/setores/{id}/reativar` - Reativar setor (admin)
-- `DELETE /api/v1/setores/{id}` - **Exclui** o setor (admin). Recusa com 400 se
+- `PATCH /api/v1/setores/{id}/desativar` - Desativar setor (admin ou técnico;
+  recusa se houver usuário ativo vinculado)
+- `PATCH /api/v1/setores/{id}/reativar` - Reativar setor (admin ou técnico)
+- `DELETE /api/v1/setores/{id}` - **Exclui** o setor (admin ou técnico). Recusa com 400 se
   houver qualquer usuário vinculado, ativo ou inativo. Para tirar de uso sem
   apagar, use o `PATCH .../desativar`
 
@@ -223,15 +223,17 @@ curl -X POST "http://localhost:8000/api/v1/comentarios/" \
   503 quando o banco não responde
 
 #### Auditoria
-- `GET /api/v1/eventos/` - Trilha dos cadastros de usuários e setores (admin).
-  Filtros: `alvo` (`usuario`/`setor`), `ator_id`, `de`, `ate`, `skip`, `limit`
+- `GET /api/v1/eventos/` - Trilha dos cadastros de usuários e setores.
+  Admin vê tudo; técnico só `alvo=setor`. Filtros: `alvo`
+  (`usuario`/`setor`), `ator_id`, `de`, `ate`, `skip`, `limit`
 
 #### Categorias
 - `GET /api/v1/categorias/` - Listar categorias
 - `GET /api/v1/categorias/{id}` - Buscar categoria por ID
-- `POST /api/v1/categorias/` - Criar categoria
-- `PUT /api/v1/categorias/{id}` - Atualizar categoria
-- `DELETE /api/v1/categorias/{id}` - Desativar categoria
+- `POST /api/v1/categorias/` - Criar categoria (admin ou técnico)
+- `PUT /api/v1/categorias/{id}` - Atualizar categoria (admin ou técnico)
+- `DELETE /api/v1/categorias/{id}` - **Exclui** a categoria (admin ou técnico).
+  Recusa com 400 se houver chamado vinculado
 
 #### Histórico
 - `GET /api/v1/historico/chamado/{chamado_id}` - Listar histórico de um chamado

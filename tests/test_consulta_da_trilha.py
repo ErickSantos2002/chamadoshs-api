@@ -357,11 +357,95 @@ class TestListagemGeral:
 
         assert [e["alvo_nome"] for e in eventos] == ["Financeiro"]
 
-    def test_e_restrito_a_administrador(self, cliente, dados, sessao, autenticar):
+    def test_usuario_comum_nao_le_a_trilha(self, cliente, dados, sessao, autenticar):
         _semear(sessao, dados)
 
         resposta = cliente.get(
-            "/api/v1/eventos/", headers=autenticar(dados["tecnico_id"], "tecnico.teste", "Tecnico")
+            "/api/v1/eventos/", headers=autenticar(dados["comum_id"], "usuario.teste", "Usuario")
+        )
+
+        assert resposta.status_code == 403
+
+
+class TestTecnicoSoVeTrilhaDeSetor:
+    """
+    Técnico administra setores, categorias e SLA desde 13/08/2026, e audita o
+    que administra. Eventos de CONTA ficam com o administrador: dizem quem
+    redefiniu a senha de quem, quem promoveu quem e quem desativou quem.
+
+    A separação é por tipo de alvo, e não por endpoint. Endpoint não separaria
+    nada: esta rota devolve os mesmos eventos de conta que
+    `GET /usuarios/{id}/eventos`, só que de todas as contas de uma vez. Proteger
+    lá e liberar aqui deixaria a restrição decorativa — a informação sairia pela
+    porta ao lado, que é a forma exata do defeito fechado no passo 0.
+    """
+
+    def _tecnico(self, autenticar, dados):
+        return autenticar(dados["tecnico_id"], "tecnico.teste", "Tecnico")
+
+    def test_sem_alvo_recebe_so_os_de_setor(self, cliente, dados, sessao, autenticar):
+        """
+        Omitir `alvo` vira "só setor" em vez de 403: o pedido é legítimo, e
+        recusá-lo obrigaria a tela a saber o perfil só para montar a query.
+        """
+        _semear(sessao, dados)
+
+        eventos = cliente.get("/api/v1/eventos/", headers=self._tecnico(autenticar, dados)).json()
+
+        assert [e["alvo_tipo"] for e in eventos] == ["setor"]
+
+    def test_alvo_setor_e_permitido(self, cliente, dados, sessao, autenticar):
+        _semear(sessao, dados)
+
+        resposta = cliente.get(
+            "/api/v1/eventos/?alvo=setor", headers=self._tecnico(autenticar, dados)
+        )
+
+        assert resposta.status_code == 200
+        assert len(resposta.json()) == 1
+
+    def test_alvo_usuario_e_recusado(self, cliente, dados, sessao, autenticar):
+        """A porta lateral, fechada explicitamente."""
+        _semear(sessao, dados)
+
+        resposta = cliente.get(
+            "/api/v1/eventos/?alvo=usuario", headers=self._tecnico(autenticar, dados)
+        )
+
+        assert resposta.status_code == 403
+
+    def test_nenhum_evento_de_senha_escapa(self, cliente, dados, sessao, autenticar):
+        """
+        O teste que fecha o buraco pelo efeito, e não pela rota: qualquer
+        caminho que devolvesse evento de conta a um técnico apareceria aqui.
+        """
+        _semear(sessao, dados)
+        headers = self._tecnico(autenticar, dados)
+
+        for consulta in ("", "?alvo=setor", "?de=2026-01-01", f"?ator_id={dados['admin_id']}"):
+            corpo = cliente.get(f"/api/v1/eventos/{consulta}", headers=headers).json()
+            assert all(e["alvo_tipo"] == "setor" for e in corpo), (
+                f"consulta {consulta!r} devolveu evento de conta para técnico"
+            )
+
+    def test_administrador_continua_vendo_tudo(self, cliente, dados, sessao, autenticar):
+        """O par obrigatório: a restrição não pode ter alcançado o admin."""
+        _semear(sessao, dados)
+
+        eventos = cliente.get("/api/v1/eventos/", headers=_como_admin(autenticar, dados)).json()
+
+        assert {e["alvo_tipo"] for e in eventos} == {"usuario", "setor"}
+
+    def test_a_trilha_de_uma_conta_continua_so_do_admin(self, cliente, dados, sessao, autenticar):
+        """
+        O endpoint que o pedido mandou não mexer. Com esta trava e a de cima, os
+        dois caminhos para evento de conta exigem administrador.
+        """
+        _semear(sessao, dados)
+
+        resposta = cliente.get(
+            f"/api/v1/usuarios/{dados['comum_id']}/eventos",
+            headers=self._tecnico(autenticar, dados),
         )
 
         assert resposta.status_code == 403

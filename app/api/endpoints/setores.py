@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.api.deps import get_db, require_admin
+from app.api.deps import get_db, require_staff
 from app.models.setor import Setor
 from app.models.usuario import Usuario
 from app.schemas.setor import SetorCreate, SetorUpdate, SetorResponse
@@ -88,7 +88,7 @@ def _garantir_desativacao_segura(db: Session, setor: Setor) -> None:
         )
 
 
-def _desativar(db: Session, setor: Setor, admin: Usuario, origem: str) -> Setor:
+def _desativar(db: Session, setor: Setor, autor: Usuario, origem: str) -> Setor:
     """
     Corpo da desativação.
 
@@ -103,7 +103,7 @@ def _desativar(db: Session, setor: Setor, admin: Usuario, origem: str) -> Setor:
     setor.ativo = False
     # Desativar setor já inativo não muda nada e não gera evento; a resposta
     # continua sendo sucesso, porque o estado pedido é o estado final.
-    registrar_alteracoes(db, setor=setor, antes=antes, ator=admin, origem=origem)
+    registrar_alteracoes(db, setor=setor, antes=antes, ator=autor, origem=origem)
     db.commit()
     db.refresh(setor)
     return setor
@@ -138,11 +138,11 @@ def buscar_setor(setor_id: int, db: Session = Depends(get_db)):
 @router.post("/", response_model=SetorResponse, status_code=status.HTTP_201_CREATED)
 def criar_setor(
     setor_data: SetorCreate,
-    admin: Usuario = Depends(require_admin),
+    autor: Usuario = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
     """
-    Cria um novo setor. Restrito a administrador.
+    Cria um novo setor. Restrito a administrador ou técnico.
     """
     setor = Setor(**setor_data.model_dump())
     db.add(setor)
@@ -150,7 +150,7 @@ def criar_setor(
     # linha chegar ao banco. Continua sendo uma transação só — setor criado sem
     # evento não é um estado alcançável.
     db.flush()
-    registrar_criacao(db, setor=setor, ator=admin, origem="POST /api/v1/setores/")
+    registrar_criacao(db, setor=setor, ator=autor, origem="POST /api/v1/setores/")
     db.commit()
     db.refresh(setor)
     return setor
@@ -160,11 +160,11 @@ def criar_setor(
 def atualizar_setor(
     setor_id: int,
     setor_data: SetorUpdate,
-    admin: Usuario = Depends(require_admin),
+    autor: Usuario = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
     """
-    Atualiza um setor existente. Restrito a administrador.
+    Atualiza um setor existente. Restrito a administrador ou técnico.
 
     É por aqui que o frontend edita setor hoje, e por aqui que ele desativa
     quando manda `ativo: false` — daí a trava e a gravação de trilha estarem
@@ -191,7 +191,7 @@ def atualizar_setor(
         db,
         setor=setor,
         antes=antes,
-        ator=admin,
+        ator=autor,
         origem="PUT /api/v1/setores/{id}",
     )
 
@@ -203,11 +203,11 @@ def atualizar_setor(
 @router.patch("/{setor_id}/desativar", response_model=SetorResponse)
 def desativar_setor(
     setor_id: int,
-    admin: Usuario = Depends(require_admin),
+    autor: Usuario = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
     """
-    Desativa um setor. Restrito a administrador.
+    Desativa um setor. Restrito a administrador ou técnico.
 
     Diz no verbo o que sempre fez no corpo: o `DELETE` desta rota nunca apagou
     setor nenhum. Fechar essa distância é o que permite, no passo seguinte, o
@@ -217,18 +217,18 @@ def desativar_setor(
     Devolve o setor para a tela atualizar a linha sem uma segunda requisição.
     """
     return _desativar(
-        db, _buscar(db, setor_id), admin, "PATCH /api/v1/setores/{id}/desativar"
+        db, _buscar(db, setor_id), autor, "PATCH /api/v1/setores/{id}/desativar"
     )
 
 
 @router.patch("/{setor_id}/reativar", response_model=SetorResponse)
 def reativar_setor(
     setor_id: int,
-    admin: Usuario = Depends(require_admin),
+    autor: Usuario = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
     """
-    Reativa um setor. Restrito a administrador.
+    Reativa um setor. Restrito a administrador ou técnico.
 
     Sem trava: a de desativação existe para não deixar usuários ativos presos a
     um setor que sumiu do formulário, e reativar é justamente o que desfaz esse
@@ -242,7 +242,7 @@ def reativar_setor(
         db,
         setor=setor,
         antes=antes,
-        ator=admin,
+        ator=autor,
         origem="PATCH /api/v1/setores/{id}/reativar",
     )
     db.commit()
@@ -253,11 +253,11 @@ def reativar_setor(
 @router.delete("/{setor_id}", status_code=status.HTTP_204_NO_CONTENT)
 def deletar_setor(
     setor_id: int,
-    admin: Usuario = Depends(require_admin),
+    autor: Usuario = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
     """
-    **Exclui** um setor. Restrito a administrador.
+    **Exclui** um setor. Restrito a administrador ou técnico.
 
     Apaga de verdade, como em categorias. Até a versão anterior esta rota
     desativava, e a mudança foi feita depois de o frontend migrar para
@@ -301,7 +301,7 @@ def deletar_setor(
     # Antes do delete: o evento lê id e nome do setor, e depois não haveria de
     # onde tirar nenhum dos dois.
     registrar_exclusao(
-        db, setor=setor, ator=admin, origem="DELETE /api/v1/setores/{id}"
+        db, setor=setor, ator=autor, origem="DELETE /api/v1/setores/{id}"
     )
     db.delete(setor)
     db.commit()
