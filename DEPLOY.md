@@ -62,10 +62,15 @@ Antes dessa mudança o arquivo estava parado na 1.0: criava um banco sem
 test_schema_sql_bate_com_os_models.py` compara o arquivo com os models e falha
 se voltarem a divergir.
 
-**Nota sobre a ordem das migrations:** duas delas estão na raiz do repositório,
-não em `migrations/` — `add_urgencia_field.sql` e
-`add_cancelado_arquivado_fields.sql`. Num banco existente que ainda não as
-recebeu, elas também precisam ser aplicadas.
+**Todas as migrations estão em `migrations/`.** Até 13/08/2026, duas viviam na
+raiz (`add_urgencia_field.sql` e `add_cancelado_arquivado_fields.sql`) e eram
+fáceis de não aplicar num banco existente, justamente por não estarem onde se
+procura. Foram movidas. Se você tem um checklist ou script antigo apontando para
+a raiz, atualize o caminho.
+
+Na raiz sobraram só os dois arquivos que **não** são migrations:
+`schema_chamados.sql` (schema completo, para banco novo) e
+`criar_usuario_inicial.sql` (bootstrap da primeira conta).
 
 ## Pré-requisitos
 

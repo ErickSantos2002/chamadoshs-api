@@ -19,11 +19,17 @@ arquivos `.sql` **aplicados à mão** contra o banco:
 migrations/add_auth_fields.sql
 migrations/add_sla_configs.sql
 migrations/add_tarefas_recorrentes.sql
+migrations/add_urgencia_field.sql
+migrations/add_cancelado_arquivado_fields.sql
 migrations/2026-08-10-add-conta-de-servico.sql
-add_urgencia_field.sql              (raiz)
-add_cancelado_arquivado_fields.sql  (raiz)
+migrations/2026-08-12-add-eventos-de-conta.sql
+migrations/2026-08-12-add-eventos-de-setor.sql
 schema_chamados.sql                 (schema COMPLETO e atual — banco novo)
 criar_usuario_inicial.sql
+
+As duas primeiras `add_*` estiveram na raiz até 13/08/2026 e foram movidas para
+`migrations/`. Toda migration mora lá; na raiz ficam só o schema completo e o
+bootstrap, que não são incrementos.
 ```
 
 **Banco novo roda só `schema_chamados.sql`; banco existente roda só o que falta
