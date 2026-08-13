@@ -193,6 +193,30 @@ class TestAuditoriaSegueOQueSeAdministra:
             f"/api/v1/usuarios/{dados['comum_id']}/eventos", headers=_tecnico(autenticar, dados)
         ).status_code == 403
 
+    def test_marcar_rotina_como_realizada_exige_staff(self, cliente, dados, autenticar):
+        """
+        `POST /tarefas-recorrentes/{id}/realizar` exigia apenas autenticação, e
+        era a única porta aberta daquele módulo — criar, editar e excluir rotina
+        já pediam staff.
+
+        A rota não só registra quem fez: ela **avança `proxima_data`**. Um
+        usuário comum marcava "Backup semanal" como realizado e o cronograma da
+        equipe pulava uma semana, sem backup nenhum ter acontecido e sem nada
+        parecer errado na tela. A interface escondia a rota; esconder não é
+        proteger.
+        """
+        corpo = {"observacao": "feito"}
+
+        assert cliente.post(
+            f"/api/v1/tarefas-recorrentes/{dados['tarefa_id']}/realizar",
+            json=corpo, headers=_comum(autenticar, dados),
+        ).status_code == 403
+
+        assert cliente.post(
+            f"/api/v1/tarefas-recorrentes/{dados['tarefa_id']}/realizar",
+            json=corpo, headers=_tecnico(autenticar, dados),
+        ).status_code == 200
+
     def test_diagnostico_continua_so_do_administrador(self, cliente, dados, autenticar):
         """
         Enumera contas e diz quais estão sem senha. Não entrou na liberação, e

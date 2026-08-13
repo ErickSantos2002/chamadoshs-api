@@ -6,7 +6,7 @@ from datetime import timedelta
 
 import logging
 
-from app.api.deps import get_current_user, get_db, require_staff
+from app.api.deps import get_db, require_staff
 from app.models.tarefa_recorrente import TarefaRecorrente, TarefaRecorrenteExecucao
 from app.models.usuario import Usuario
 from app.schemas.tarefa_recorrente import (
@@ -165,14 +165,25 @@ def listar_execucoes(tarefa_id: int, db: Session = Depends(get_db)):
 def realizar_tarefa(
     tarefa_id: int,
     dados: RealizarTarefaRequest,
-    current_user: Usuario = Depends(get_current_user),
+    current_user: Usuario = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
     """
     Registra uma execução e avança a próxima data para a próxima ocorrência.
+    Restrito a administrador ou técnico.
 
     Quem realizou vem do token: aceitar do corpo permitia registrar a
     execução em nome de outra pessoa.
+
+    **Por que `require_staff` e não `get_current_user`**, que era o que estava
+    aqui: rotina recorrente é trabalho da equipe de TI, e esta rota não apenas
+    registra quem fez — ela **avança `proxima_data`**. Com qualquer autenticado
+    podendo chamá-la, um usuário comum marcava "Backup semanal" como realizado
+    e o cronograma da equipe pulava uma semana, sem backup nenhum ter
+    acontecido e sem nada parecer errado na tela.
+
+    O restante do CRUD de rotina já exigia staff; era esta a porta que ficou
+    aberta, e ela é a única do módulo que muda o estado do agendamento.
     """
     # Só `is not None`: o aviso conta quem ainda manda o campo, não quem manda
     # o id de outra pessoa. Ver a nota em chamados.py.
