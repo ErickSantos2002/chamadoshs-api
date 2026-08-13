@@ -217,6 +217,34 @@ class TestAuditoriaSegueOQueSeAdministra:
             json=corpo, headers=_tecnico(autenticar, dados),
         ).status_code == 200
 
+    def test_rotinas_da_equipe_nao_sao_visiveis_a_usuario_comum(
+        self, cliente, dados, autenticar
+    ):
+        """
+        Leitura acompanha escrita no módulo de rotinas: é trabalho interno da
+        equipe de TI, e o histórico de execuções diz quem fez o quê e quando.
+        Confirmado com ele que nenhuma tela lista rotinas para usuário comum.
+        """
+        comum = _comum(autenticar, dados)
+        tarefa = dados["tarefa_id"]
+
+        assert cliente.get("/api/v1/tarefas-recorrentes/", headers=comum).status_code == 403
+        assert cliente.get(f"/api/v1/tarefas-recorrentes/{tarefa}", headers=comum).status_code == 403
+        assert cliente.get(
+            f"/api/v1/tarefas-recorrentes/{tarefa}/execucoes", headers=comum
+        ).status_code == 403
+
+    def test_tecnico_continua_lendo_as_rotinas(self, cliente, dados, autenticar):
+        """O par: a restrição não pode ter alcançado quem faz o trabalho."""
+        tecnico = _tecnico(autenticar, dados)
+        tarefa = dados["tarefa_id"]
+
+        assert cliente.get("/api/v1/tarefas-recorrentes/", headers=tecnico).status_code == 200
+        assert cliente.get(f"/api/v1/tarefas-recorrentes/{tarefa}", headers=tecnico).status_code == 200
+        assert cliente.get(
+            f"/api/v1/tarefas-recorrentes/{tarefa}/execucoes", headers=tecnico
+        ).status_code == 200
+
     def test_diagnostico_continua_so_do_administrador(self, cliente, dados, autenticar):
         """
         Enumera contas e diz quais estão sem senha. Não entrou na liberação, e

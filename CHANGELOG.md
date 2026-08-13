@@ -54,6 +54,25 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   "pode" e "não pode" — uma trava verificada só pelo lado da recusa passaria
   também com uma API que recusa tudo.
 
+- **Rotinas recorrentes passam a exigir administrador ou técnico no módulo
+  inteiro.** A escrita já exigia — `POST`, `PUT` e `DELETE` estavam com
+  `require_staff` desde a entrega original. O que estava aberto a qualquer
+  autenticado era `POST /{id}/realizar` e as três leituras.
+
+  **`POST /{id}/realizar` era o furo sério, e não parece um por não ser CRUD:**
+  a rota não só registra quem fez, ela **avança `proxima_data`**. Qualquer
+  usuário autenticado marcava "Backup semanal" como realizado e o cronograma da
+  equipe pulava uma semana — sem backup nenhum ter acontecido, com a execução
+  gravada em nome de quem chamou, e nada parecendo errado na tela.
+
+  As leituras (listar, buscar, execuções) foram fechadas depois de confirmado
+  que nenhuma tela lista rotinas para usuário comum. É trabalho interno da
+  equipe, e o histórico de execuções diz quem fez o quê e quando.
+
+  A divergência era a mesma dos itens acima, na direção oposta: ali a API era
+  mais estrita que a interface, aqui era mais frouxa. **A segunda é a que
+  importa, porque interface não é proteção.**
+
 ### Alterado — mudança de contrato
 - **`DELETE /api/v1/setores/{id}` passou a EXCLUIR o setor.** Até aqui ele
   desativava, e essa era a última distância entre o que o verbo diz e o que o

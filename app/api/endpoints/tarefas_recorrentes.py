@@ -63,9 +63,18 @@ def listar_tarefas(
     apenas_atrasadas: bool = False,
     skip: int = Query(0, ge=0),
     limit: int = Query(200, ge=1),
+    _staff: Usuario = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
-    """Lista tarefas recorrentes (ordenadas pela próxima data)."""
+    """
+    Lista tarefas recorrentes (ordenadas pela próxima data). Restrito a
+    administrador ou técnico.
+
+    O módulo inteiro é da equipe de TI, e a leitura acompanha a escrita: rotina
+    interna não é informação de solicitante. Estava aberta a qualquer
+    autenticado enquanto só a interface restringia a página — e interface não é
+    proteção, é conveniência.
+    """
     query = db.query(TarefaRecorrente)
     if ativo is not None:
         query = query.filter(TarefaRecorrente.ativo == ativo)
@@ -77,7 +86,11 @@ def listar_tarefas(
 
 
 @router.get("/{tarefa_id}", response_model=TarefaRecorrenteResponse)
-def buscar_tarefa(tarefa_id: int, db: Session = Depends(get_db)):
+def buscar_tarefa(
+    tarefa_id: int,
+    _staff: Usuario = Depends(require_staff),
+    db: Session = Depends(get_db),
+):
     tarefa = db.query(TarefaRecorrente).filter(TarefaRecorrente.id == tarefa_id).first()
     if not tarefa:
         raise HTTPException(status_code=404, detail="Tarefa recorrente não encontrada")
@@ -145,7 +158,17 @@ def deletar_tarefa(
 
 
 @router.get("/{tarefa_id}/execucoes", response_model=List[ExecucaoResponse])
-def listar_execucoes(tarefa_id: int, db: Session = Depends(get_db)):
+def listar_execucoes(
+    tarefa_id: int,
+    _staff: Usuario = Depends(require_staff),
+    db: Session = Depends(get_db),
+):
+    """
+    Histórico de execuções de uma rotina. Restrito a administrador ou técnico.
+
+    Diz quem fez o quê e quando dentro da equipe — é o registro de trabalho dos
+    técnicos, e não tem leitor legítimo fora dela.
+    """
     execucoes = (
         db.query(TarefaRecorrenteExecucao)
         .filter(TarefaRecorrenteExecucao.tarefa_id == tarefa_id)
