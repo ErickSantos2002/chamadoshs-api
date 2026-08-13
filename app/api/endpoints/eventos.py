@@ -20,8 +20,12 @@ def listar_eventos(
     ator_id: Optional[int] = Query(None, description="Quem praticou a ação"),
     de: Optional[date] = Query(None, description="Primeiro dia do período (inclusivo)"),
     ate: Optional[date] = Query(None, description="Último dia do período (inclusivo)"),
-    skip: int = 0,
-    limit: int = Query(100, le=500),
+    # ge=0 e ge=1 não são zelo: a mescla das duas tabelas termina num
+    # `juntos[skip : skip + limit]`, e slice de Python aceita índice negativo
+    # contando do fim. Um `skip=-5` devolveria silenciosamente o rabo da lista
+    # — as linhas mais ANTIGAS — numa consulta que promete as mais recentes.
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
     """

@@ -354,6 +354,49 @@ class TestSetorComGenteDentro:
 
         assert resposta.status_code == 200
 
+    def test_setor_ja_inativo_passa_pelas_tres_rotas(self, cliente, dados, sessao, autenticar):
+        """
+        A regressão que passou despercebida na primeira escrita desta entrega.
+
+        Setor inativo COM usuários ativos dentro é estado alcançável: a API
+        aceita vincular alguém a setor inativo (ver
+        `test_setor_inativo_ainda_e_um_setor`), e um setor pode ser desativado
+        vazio e receber gente depois.
+
+        Nesse estado, a trava não deve disparar em rota nenhuma — ninguém está
+        desativando coisa alguma, o setor já está desativado. Enquanto a
+        condição "só se estiver ativo" morava no chamador, o `PUT` respondia 200
+        e os `PATCH`/`DELETE` respondiam 400 falando de usuários vinculados: a
+        divergência entre rotas que este passo existe para eliminar, cometida
+        dentro dele mesmo.
+        """
+        headers = _como_admin(autenticar, dados)
+        sessao.add(Setor(id=2, nome="Extinto", ativo=False))
+        sessao.flush()
+        sessao.add(Usuario(id=40, nome="preso.no.setor", role_id=3, setor_id=2, ativo=True))
+        sessao.commit()
+
+        assert cliente.patch("/api/v1/setores/2/desativar", headers=headers).status_code == 200
+        assert cliente.delete("/api/v1/setores/2", headers=headers).status_code == 204
+        assert cliente.put(
+            "/api/v1/setores/2", json={"ativo": False}, headers=headers
+        ).status_code == 200
+
+        # E nenhuma das três gravou evento: não houve mudança para registrar.
+        sessao.expire_all()
+        assert sessao.query(EventoDeSetor).count() == 0
+
+    def test_a_trava_continua_valendo_no_setor_ativo(self, cliente, dados, sessao, autenticar):
+        """
+        O par do teste acima. Sem ele, a correção poderia ter sido "remover a
+        trava", que faria o de cima passar e desfaria a entrega.
+        """
+        resposta = cliente.patch(
+            "/api/v1/setores/1/desativar", headers=_como_admin(autenticar, dados)
+        )
+
+        assert resposta.status_code == 400
+
     def test_reativar_nao_e_travado(self, cliente, dados, sessao, autenticar):
         """
         A trava existe para não deixar gente presa num setor que sumiu do

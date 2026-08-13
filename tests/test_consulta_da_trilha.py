@@ -272,6 +272,20 @@ class TestListagemGeral:
 
         assert [e["chave"] for e in primeira] == [e["chave"] for e in segunda]
 
+    def test_paginacao_recusa_valores_fora_da_faixa(self, cliente, dados, sessao, autenticar):
+        """
+        A mescla termina num `juntos[skip : skip + limit]`, e slice de Python
+        aceita índice negativo contando do fim: `skip=-5` devolveria as linhas
+        mais ANTIGAS numa consulta que promete as mais recentes, sem erro
+        nenhum. 422 é a resposta certa para parâmetro fora da faixa.
+        """
+        _semear(sessao, dados)
+        headers = _como_admin(autenticar, dados)
+
+        assert cliente.get("/api/v1/eventos/?skip=-5", headers=headers).status_code == 422
+        assert cliente.get("/api/v1/eventos/?limit=0", headers=headers).status_code == 422
+        assert cliente.get("/api/v1/eventos/?limit=99999", headers=headers).status_code == 422
+
     def test_setor_apagado_continua_legivel_na_listagem(
         self, cliente, dados, sessao, autenticar
     ):

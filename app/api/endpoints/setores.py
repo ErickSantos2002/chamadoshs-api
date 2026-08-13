@@ -44,10 +44,24 @@ def _garantir_desativacao_segura(db: Session, setor: Setor) -> None:
     justamente o histórico que não se apaga — contá-los tornaria todo setor
     antigo indesativável, que é o oposto do que se quer.
 
-    Vale para os dois caminhos que desativam, PATCH e PUT. Em usuários essa
-    trava nasceu só no DELETE e o `PUT {"ativo": false}` passava por cima dela;
-    aqui ela já entra compartilhada.
+    Vale para os três caminhos que desativam: PATCH, PUT e DELETE. Em usuários
+    essa trava nasceu só no DELETE e o `PUT {"ativo": false}` passava por cima
+    dela; aqui ela já entra compartilhada.
+
+    **Setor que já está inativo passa direto**, e a condição mora aqui dentro,
+    não nos chamadores. Desativar o que já está desativado não muda nada: o
+    estado pedido é o estado final, então a resposta é sucesso e nenhum evento é
+    gravado. Recusar seria pior do que inútil — a mensagem falaria de usuários
+    ativos vinculados a um setor que ninguém está desativando agora.
+
+    A condição já morou no `PUT`, como `if ... and setor.ativo`, e foi assim que
+    as rotas divergiram: `PUT` respondia 200 num setor já inativo e os `PATCH` e
+    `DELETE` respondiam 400. Guarda repetida no chamador é a mesma forma de erro
+    que este passo inteiro existe para eliminar — quem checa é a trava, uma vez.
     """
+    if not setor.ativo:
+        return
+
     vinculados = _usuarios_ativos(db, setor.id)
     if vinculados > 0:
         raise HTTPException(
@@ -147,7 +161,8 @@ def atualizar_setor(
 
     # Só quando `ativo` chega como false. Reativar é o caminho de volta —
     # aplicar a trava a qualquer mudança de `ativo` bloquearia a recuperação.
-    if update_data.get("ativo") is False and setor.ativo:
+    # "Já está inativo" é decidido dentro da trava, não aqui.
+    if update_data.get("ativo") is False:
         _garantir_desativacao_segura(db, setor)
 
     for field, value in update_data.items():
