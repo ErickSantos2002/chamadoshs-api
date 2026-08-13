@@ -129,8 +129,8 @@ def _garantir_rebaixamento_seguro(db: Session, usuario: Usuario, novo_role_id: i
 
 @router.get("/", response_model=List[UsuarioResponse])
 def listar_usuarios(
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1),
     setor_id: int = None,
     role_id: int = None,
     ativo: bool = None,

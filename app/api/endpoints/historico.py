@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -12,8 +12,8 @@ router = APIRouter()
 @router.get("/chamado/{chamado_id}", response_model=List[HistoricoResponse])
 def listar_historico_chamado(
     chamado_id: int,
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1),
     db: Session = Depends(get_db)
 ):
     """

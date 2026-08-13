@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -92,8 +92,8 @@ def _desativar(db: Session, setor: Setor, admin: Usuario, origem: str) -> Setor:
 
 @router.get("/", response_model=List[SetorResponse])
 def listar_setores(
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1),
     ativo: bool = None,
     db: Session = Depends(get_db)
 ):

@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 @router.get("/chamado/{chamado_id}", response_model=List[ComentarioResponse])
 def listar_comentarios_chamado(
     chamado_id: int,
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1),
     current_user: Usuario = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):

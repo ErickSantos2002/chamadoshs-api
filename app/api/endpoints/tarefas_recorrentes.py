@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
@@ -61,8 +61,8 @@ def _montar_response(t: TarefaRecorrente, db: Session) -> dict:
 def listar_tarefas(
     ativo: Optional[bool] = None,
     apenas_atrasadas: bool = False,
-    skip: int = 0,
-    limit: int = 200,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1),
     db: Session = Depends(get_db),
 ):
     """Lista tarefas recorrentes (ordenadas pela próxima data)."""
