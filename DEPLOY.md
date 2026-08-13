@@ -1,30 +1,45 @@
 # Guia de Deploy - Easypanel
 
-## ⚠️ Ordem obrigatória de deploy (feature de SLA)
+## ⚠️ Ordem obrigatória de deploy
 
-A partir da feature de SLA, o deploy **precisa** seguir esta ordem, sempre que
-houver migração pendente em `migrations/`:
+Sempre que houver migração pendente em `migrations/`:
 
-1. **Rodar a migração no console do Postgres** — hoje, `migrations/add_sla_configs.sql`
-   (cria a tabela `sla_configs` e popula os prazos por prioridade).
+1. **Rodar a migração pendente** no console SQL do Postgres, uma de cada vez.
 2. **Deploy da API.**
 3. **Deploy do frontend.**
 
-A pasta `migrations/` (ex.: `migrations/add_sla_configs.sql`, `migrations/add_auth_fields.sql`)
-guarda os incrementos de schema que rodam **manualmente** no console SQL do
-Postgres — não existe `Base.metadata.create_all` nem migração automática neste
-projeto. Isso não é opcional nem cosmético: **se a API nova subir antes da
-migração**, todo endpoint de chamados (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`
-em `/api/v1/chamados/*`) tenta consultar `sla_configs` para montar o bloco de
-SLA da resposta; sem a tabela, a query falha e **o CRUD inteiro de chamados
-cai** — não é só a feature de SLA que fica indisponível, é o sistema todo.
+**Qual é a pendente?** Não há tabela de controle de migrações neste projeto, e
+os arquivos são nomeados por data. Confira contra o banco: cada arquivo termina
+com as consultas de verificação que dizem se ele já foi aplicado. O `CHANGELOG.md`,
+na seção **Ação necessária no deploy** da versão que está subindo, lista o que
+precisa rodar e o que já rodou.
 
-Rodar a migração *antes* do deploy é seguro mesmo que o deploy da API falhe ou
-seja adiado: a tabela `sla_configs` órfã (sem a API nova para lê-la) não afeta
-nada do comportamento atual. Pelo mesmo motivo, um **rollback da API depois da
-migração** também é seguro — a API antiga simplesmente ignora a tabela nova, e
-a API nova (resiliente à tabela ausente) não quebra se a migração for
-revertida depois.
+Os arquivos de `migrations/` rodam **manualmente** — não existe
+`Base.metadata.create_all` nem migração automática aqui.
+
+### Por que a ordem não é cosmética
+
+O caso que estabeleceu a regra foi o da feature de SLA, e ele continua sendo a
+melhor ilustração: com a API nova no ar antes da migração, todo endpoint de
+`/api/v1/chamados/*` tentava consultar `sla_configs` para montar o bloco de SLA
+da resposta e, sem a tabela, **o CRUD inteiro de chamados caía** — não só a
+feature nova, o sistema todo.
+
+A forma geral: **o código novo pressupõe o schema novo.** Subir a imagem antes
+da migração derruba o que depender da tabela ausente, e o alcance disso costuma
+ser maior do que o da feature que motivou a mudança.
+
+Na direção certa, os dois lados são seguros:
+
+- **Migração antes, deploy depois (mesmo que atrase):** tabela nova que nenhum
+  código lê ainda não altera comportamento nenhum.
+- **Rollback da imagem depois da migração:** a API antiga simplesmente ignora a
+  tabela que não conhece.
+
+Isso vale para migrações **aditivas**, que é o que este projeto tem tido —
+`CREATE TABLE`/`ADD COLUMN`. Uma migração que remova ou renomeie coluna não tem
+essa propriedade, e aí o rollback da imagem deixa de ser seguro: ao escrever
+uma dessas, diga isso no cabeçalho do arquivo.
 
 ## Banco novo x banco existente
 
