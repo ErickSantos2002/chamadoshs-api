@@ -32,6 +32,9 @@ ACAO_DESATIVACAO = "desativacao"
 ACAO_REATIVACAO = "reativacao"
 ACAO_ALTERACAO_DE_NOME = "alteracao_de_nome"
 ACAO_ALTERACAO_DE_DESCRICAO = "alteracao_de_descricao"
+# Exclusão de verdade, que só existe para setor. Em contas não há verbo
+# equivalente: conta que sai vira inativa e a trilha impede apagá-la.
+ACAO_EXCLUSAO = "exclusao"
 
 # Campos acompanhados: exatamente os que o `SetorUpdate` aceita. A regra é "todo
 # campo que a edição pode mudar gera evento" — uma lista do que parece
@@ -112,6 +115,36 @@ def registrar_criacao(
         acao=ACAO_CRIACAO,
         origem=origem,
         valor_novo=setor.nome,
+    )
+    db.add(evento)
+    return evento
+
+
+def registrar_exclusao(
+    db: Session, *, setor: Setor, ator: Usuario, origem: Optional[str] = None
+) -> EventoDeSetor:
+    """
+    Evento de setor apagado — o último registro que aquele setor terá.
+
+    Precisa rodar ANTES do `db.delete(setor)`, porque lê `setor.id` e
+    `setor.nome` para congelar no evento. Depois do delete não há de onde tirar
+    nenhum dos dois.
+
+    É aqui que o desenho da tabela deixa de ser teórico: `eventos_de_setor` não
+    tem FK para `setores` justamente para que esta linha sobreviva à exclusão
+    que ela registra. Com FK, o `INSERT` deste evento e o `DELETE` do setor não
+    poderiam coexistir na mesma transação — e a trilha perderia exatamente o
+    evento mais importante do setor.
+
+    `valor_anterior` guarda o nome; `valor_novo` fica nulo, que é a leitura
+    natural de "deixou de existir".
+    """
+    evento = _novo_evento(
+        setor=setor,
+        ator=ator,
+        acao=ACAO_EXCLUSAO,
+        origem=origem,
+        valor_anterior=setor.nome,
     )
     db.add(evento)
     return evento

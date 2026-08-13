@@ -240,10 +240,11 @@ class TestSetorPatchEDeleteNaoDivergem:
         assert resposta.status_code == 200
         assert resposta.json()["ativo"] is True
 
-    def test_delete_de_setor_continua_desativando(self, cliente, dados, sessao, autenticar):
+    def test_delete_de_setor_agora_exclui(self, cliente, dados, sessao, autenticar):
         """
-        O contrato de hoje, que o passo 3 vai mudar — e é por isso que ele só
-        acontece depois de o frontend migrar para o PATCH.
+        O passo 3, executado depois de o frontend migrar: o `DELETE` deixou de
+        desativar e passou a apagar. Quem quer o comportamento antigo usa o
+        `PATCH .../desativar`.
         """
         setor_id = _setor_vazio(sessao)
 
@@ -252,11 +253,29 @@ class TestSetorPatchEDeleteNaoDivergem:
         )
 
         assert resposta.status_code == 204
-        assert _setor(sessao, setor_id).ativo is False
-        # Desativado, não apagado.
-        assert sessao.query(Setor).filter(Setor.id == setor_id).count() == 1
+        sessao.expire_all()
+        assert sessao.query(Setor).filter(Setor.id == setor_id).count() == 0
 
-    def test_a_origem_separa_as_duas_rotas(self, cliente, dados, sessao, autenticar):
+    def test_desativar_e_excluir_deixaram_de_ser_a_mesma_coisa(
+        self, cliente, dados, sessao, autenticar
+    ):
+        """
+        O par que dá sentido ao passo: as duas rotas agora fazem coisas
+        diferentes, e é essa distinção que o plano inteiro existiu para tornar
+        possível sem ambiguidade.
+        """
+        headers = _como_admin(autenticar, dados)
+        desativado = _setor_vazio(sessao, setor_id=2, nome="Sera Desativado")
+        excluido = _setor_vazio(sessao, setor_id=3, nome="Sera Excluido")
+
+        cliente.patch(f"/api/v1/setores/{desativado}/desativar", headers=headers)
+        cliente.delete(f"/api/v1/setores/{excluido}", headers=headers)
+
+        sessao.expire_all()
+        assert _setor(sessao, desativado).ativo is False          # existe, inativo
+        assert sessao.query(Setor).filter(Setor.id == excluido).count() == 0  # não existe
+
+    def test_cada_rota_grava_sua_propria_origem(self, cliente, dados, sessao, autenticar):
         setor_id = _setor_vazio(sessao)
         headers = _como_admin(autenticar, dados)
 
@@ -265,13 +284,11 @@ class TestSetorPatchEDeleteNaoDivergem:
         cliente.delete(f"/api/v1/setores/{setor_id}", headers=headers)
 
         sessao.expire_all()
-        origens = [
-            e.origem for e in sessao.query(EventoDeSetor).order_by(EventoDeSetor.id)
-        ]
-        assert origens == [
-            "PATCH /api/v1/setores/{id}/desativar",
-            "PATCH /api/v1/setores/{id}/reativar",
-            "DELETE /api/v1/setores/{id}",
+        eventos = sessao.query(EventoDeSetor).order_by(EventoDeSetor.id).all()
+        assert [(e.origem, e.acao) for e in eventos] == [
+            ("PATCH /api/v1/setores/{id}/desativar", "desativacao"),
+            ("PATCH /api/v1/setores/{id}/reativar", "reativacao"),
+            ("DELETE /api/v1/setores/{id}", "exclusao"),
         ]
 
     def test_setor_inexistente_devolve_404(self, cliente, dados, autenticar):
@@ -354,7 +371,7 @@ class TestSetorComGenteDentro:
 
         assert resposta.status_code == 200
 
-    def test_setor_ja_inativo_passa_pelas_tres_rotas(self, cliente, dados, sessao, autenticar):
+    def test_setor_ja_inativo_passa_pelas_rotas_que_desativam(self, cliente, dados, sessao, autenticar):
         """
         A regressão que passou despercebida na primeira escrita desta entrega.
 
@@ -377,14 +394,18 @@ class TestSetorComGenteDentro:
         sessao.commit()
 
         assert cliente.patch("/api/v1/setores/2/desativar", headers=headers).status_code == 200
-        assert cliente.delete("/api/v1/setores/2", headers=headers).status_code == 204
         assert cliente.put(
             "/api/v1/setores/2", json={"ativo": False}, headers=headers
         ).status_code == 200
 
-        # E nenhuma das três gravou evento: não houve mudança para registrar.
+        # E nenhuma das duas gravou evento: não houve mudança para registrar.
         sessao.expire_all()
         assert sessao.query(EventoDeSetor).count() == 0
+
+        # O DELETE não entra nesta lista desde que passou a EXCLUIR: ele não é
+        # mais uma porta para desativar, e a trava dele conta todos os
+        # vinculados — inclusive este usuário ativo.
+        assert cliente.delete("/api/v1/setores/2", headers=headers).status_code == 400
 
     def test_a_trava_continua_valendo_no_setor_ativo(self, cliente, dados, sessao, autenticar):
         """

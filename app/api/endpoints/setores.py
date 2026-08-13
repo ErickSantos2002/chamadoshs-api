@@ -10,6 +10,7 @@ from app.services.evento_setor_service import (
     instantaneo,
     registrar_alteracoes,
     registrar_criacao,
+    registrar_exclusao,
 )
 
 router = APIRouter()
@@ -23,11 +24,25 @@ def _buscar(db: Session, setor_id: int) -> Setor:
 
 
 def _usuarios_ativos(db: Session, setor_id: int) -> int:
+    """Quem ainda trabalha no setor. Usado pela trava de DESATIVAÇÃO."""
     return (
         db.query(Usuario)
         .filter(Usuario.setor_id == setor_id, Usuario.ativo.is_(True))
         .count()
     )
+
+
+def _usuarios_vinculados(db: Session, setor_id: int) -> int:
+    """
+    Qualquer conta apontando para o setor, ativa ou não. Usado pela trava de
+    EXCLUSÃO.
+
+    As duas contagens existem separadas porque respondem a perguntas
+    diferentes. Desativar é sobre gente que ainda trabalha ali; apagar é sobre
+    o que a FK `usuarios.setor_id` permite — e ela não distingue conta ativa de
+    inativa, então um único ex-funcionário faz o banco recusar o DELETE.
+    """
+    return db.query(Usuario).filter(Usuario.setor_id == setor_id).count()
 
 
 def _garantir_desativacao_segura(db: Session, setor: Setor) -> None:
@@ -75,8 +90,12 @@ def _garantir_desativacao_segura(db: Session, setor: Setor) -> None:
 
 def _desativar(db: Session, setor: Setor, admin: Usuario, origem: str) -> Setor:
     """
-    Corpo compartilhado pelo PATCH de desativar e pelo DELETE, que só diferem
-    na `origem` gravada — é por ela que se mede quanto do frontend já migrou.
+    Corpo da desativação.
+
+    Deixou de ser compartilhado com o `DELETE` quando este passou a excluir de
+    verdade. O parâmetro `origem` continua existindo porque a trilha registra
+    por onde a mudança entrou, e porque nada garante que não haverá uma segunda
+    porta para desativar no futuro.
     """
     _garantir_desativacao_segura(db, setor)
 
@@ -238,20 +257,52 @@ def deletar_setor(
     db: Session = Depends(get_db),
 ):
     """
-    Desativa um setor. Restrito a administrador.
+    **Exclui** um setor. Restrito a administrador.
 
-    Mantido porque o frontend chama esta rota hoje; delega para o mesmo corpo
-    do `PATCH .../desativar`, então as duas não têm como divergir.
+    Apaga de verdade, como em categorias. Até a versão anterior esta rota
+    desativava, e a mudança foi feita depois de o frontend migrar para
+    `PATCH .../desativar` — é a única do plano que altera o contrato de uma
+    rota existente, e por isso veio isolada no fim.
 
-    ATENÇÃO: esta é a rota que MUDA DE COMPORTAMENTO no passo 3. Lá ela passa a
-    excluir o setor de verdade, com checagem de vínculo, como já acontece em
-    categorias — e o `PATCH .../desativar` fica sendo o caminho para o que hoje
-    ela faz. Quem chamar `DELETE` esperando desativação vai apagar. É por isso
-    que o passo 3 só acontece depois de o frontend migrar para o PATCH.
+    Quem quer o comportamento antigo usa `PATCH /{id}/desativar`.
 
-    Uma trava nova entrou junto com esta entrega: desativar setor com usuários
-    ativos vinculados devolve 400. Antes passava e deixava as contas presas a
-    um setor que a tela não oferece mais.
+    **A checagem aqui conta TODOS os usuários vinculados, não só os ativos** —
+    e é uma trava diferente da de desativação, apesar do nome parecido. A FK
+    `usuarios.setor_id` não tem `ON DELETE`: qualquer vínculo, de conta ativa
+    ou inativa, faz o banco recusar a exclusão. Checar antes é o que transforma
+    esse erro num 400 com explicação, em vez de um 500 vindo do driver.
+
+    O ex-funcionário de um setor extinto é exatamente o caso: ele não impede
+    DESATIVAR o setor (é histórico, e contá-lo tornaria todo setor antigo
+    indesativável), mas impede APAGAR, porque o vínculo dele continua apontando
+    para a linha. Para apagar um setor assim, é preciso primeiro mover ou
+    esvaziar o setor dessas contas — decisão de quem administra, não algo que
+    esta rota deva fazer por conta própria: mexer no cadastro de pessoas como
+    efeito colateral de apagar um setor é o tipo de coisa que ninguém espera.
+
+    A trilha sobrevive à exclusão. `eventos_de_setor` não tem FK para
+    `setores`, e é por isso que o evento de exclusão pode ser gravado na mesma
+    transação que apaga o alvo.
     """
-    _desativar(db, _buscar(db, setor_id), admin, "DELETE /api/v1/setores/{id}")
+    setor = _buscar(db, setor_id)
+
+    vinculados = _usuarios_vinculados(db, setor_id)
+    if vinculados > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Não é possível excluir setor com {vinculados} usuário(s) "
+                "vinculado(s). Mova essas contas para outro setor, ou use "
+                "PATCH /api/v1/setores/{id}/desativar para tirá-lo de uso "
+                "sem apagar."
+            ),
+        )
+
+    # Antes do delete: o evento lê id e nome do setor, e depois não haveria de
+    # onde tirar nenhum dos dois.
+    registrar_exclusao(
+        db, setor=setor, ator=admin, origem="DELETE /api/v1/setores/{id}"
+    )
+    db.delete(setor)
+    db.commit()
     return None

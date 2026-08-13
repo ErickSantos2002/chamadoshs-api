@@ -214,8 +214,9 @@ curl -X POST "http://localhost:8000/api/v1/comentarios/" \
 - `PATCH /api/v1/setores/{id}/desativar` - Desativar setor (admin; recusa se
   houver usuário ativo vinculado)
 - `PATCH /api/v1/setores/{id}/reativar` - Reativar setor (admin)
-- `DELETE /api/v1/setores/{id}` - Desativa o setor; delega para o `PATCH`
-  acima. **Passará a excluir de verdade** quando o frontend migrar
+- `DELETE /api/v1/setores/{id}` - **Exclui** o setor (admin). Recusa com 400 se
+  houver qualquer usuário vinculado, ativo ou inativo. Para tirar de uso sem
+  apagar, use o `PATCH .../desativar`
 
 #### Saúde
 - `GET /api/v1/health` - Estado da API e do banco. **Público**. 200 saudável,

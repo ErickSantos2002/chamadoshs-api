@@ -12,6 +12,45 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Alterado — mudança de contrato
+- **`DELETE /api/v1/setores/{id}` passou a EXCLUIR o setor.** Até aqui ele
+  desativava, e essa era a última distância entre o que o verbo diz e o que o
+  corpo faz. Quem quer o comportamento antigo usa `PATCH /{id}/desativar`.
+
+  É a **única mudança do plano que altera o contrato de uma rota existente**, e
+  por isso veio isolada no fim, depois de o frontend migrar na 1.4.2 e de estar
+  confirmado que ele é o único cliente da API. Se algum consumidor tiver ficado
+  para trás chamando `DELETE` esperando desativação, ele passa a apagar.
+
+  **A trava conta TODOS os usuários vinculados, não só os ativos** — é uma
+  checagem diferente da de desativação, apesar do nome parecido. A FK
+  `usuarios.setor_id` não tem `ON DELETE` e não distingue conta ativa de
+  inativa: um único ex-funcionário faz o banco recusar. Checar antes é o que
+  transforma isso em 400 com explicação, em vez de 500 do driver.
+
+  O contraste é proposital e ambos os lados têm teste: o ex-funcionário de um
+  setor extinto **não** impede desativar (é histórico, e contá-lo tornaria todo
+  setor antigo indesativável) e **impede** apagar. A mensagem do 400 aponta as
+  duas saídas: mover as contas para outro setor, ou desativar em vez de apagar.
+
+  A rota **não** desvincula contas por conta própria. Mexer no cadastro de
+  pessoas como efeito colateral de apagar um setor é o tipo de coisa que
+  ninguém espera de um `DELETE`.
+
+  **A trilha sobrevive ao setor apagado**, e é aqui que a decisão do passo
+  anterior deixa de ser teórica: `eventos_de_setor` não tem FK para `setores`
+  justamente para que o evento de exclusão possa ser gravado na mesma transação
+  que apaga o alvo. Com FK, essa transação seria impossível e a trilha perderia
+  o evento mais importante que um setor pode ter. A história anterior — criação,
+  renomeações, desativações — continua legível depois da exclusão, com o nome
+  congelado em cada linha.
+
+  Ação nova no vocabulário: `exclusao`, em `eventos_de_setor`. Não há
+  equivalente em `eventos_de_conta`, e não deve haver: conta que sai vira
+  inativa, e a trilha impede apagá-la.
+
+  15 testes em `tests/test_exclusao_de_setor.py`.
+
 ### Adicionado
 - **`GET /api/v1/health`**, público e barato o bastante para ser chamado a cada
   60s, para a faixa de status do frontend e para monitoramento externo.
