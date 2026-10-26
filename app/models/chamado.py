@@ -36,6 +36,14 @@ class Chamado(Base):
     observacoes = Column(Text)
     avaliacao = Column(Integer, CheckConstraint('avaliacao >= 1 AND avaliacao <= 5'))
 
+    # Setor que atende o chamado: TI ou QUALIDADE. NÃO é o setor de quem abre
+    # — esse vem de `usuarios.setor_id`, e um não substitui o outro.
+    #
+    # server_default além do default, como em `usuarios.conta_de_servico`: o
+    # default do Python só vale para linhas criadas pelo ORM, e a API antiga
+    # (num rollback de imagem) ou um INSERT por SQL direto não mandam a coluna.
+    setor_destino = Column(String(20), nullable=False, default="TI", server_default="TI")
+
     # Flags de controle
     cancelado = Column(Boolean, default=False, nullable=False)
     arquivado = Column(Boolean, default=False, nullable=False)
@@ -48,6 +56,7 @@ class Chamado(Base):
         CheckConstraint("prioridade IN ('Baixa', 'Média', 'Alta', 'Crítica')", name='chk_prioridade'),
         CheckConstraint("urgencia IS NULL OR urgencia IN ('Não Urgente', 'Normal', 'Urgente', 'Muito Urgente')", name='chk_urgencia'),
         CheckConstraint("status IN ('Aberto', 'Em Andamento', 'Aguardando', 'Resolvido', 'Fechado')", name='chk_status'),
+        CheckConstraint("setor_destino IN ('TI', 'QUALIDADE')", name='chk_setor_destino'),
     )
 
     # Relationships
