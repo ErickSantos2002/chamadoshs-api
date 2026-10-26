@@ -545,3 +545,61 @@ class TestNadaMaisMuda:
         for ref in referencias(alternativas):
             assert ref.startswith("#/components/schemas/")
             assert ref.rsplit("/", 1)[-1] in componentes
+
+
+class TestDocumentacaoBateComAValidacao:
+    """
+    O schema do corpo no OpenAPI tem de dizer o que a validação faz. Cada
+    corpo vale por uma alternativa do `oneOf`, e só uma: com as duas
+    aceitando o mesmo corpo, quem gera cliente ou valida pelo /docs fica sem
+    saber qual regra vale.
+    """
+
+    @pytest.fixture
+    def alternativas(self, cliente):
+        openapi = cliente.get("/openapi.json").json()
+        corpo = openapi["paths"]["/api/v1/chamados/"]["post"]["requestBody"]
+        return {a["title"]: a for a in corpo["content"]["application/json"]["schema"]["oneOf"]}
+
+    def test_ti_documenta_so_o_setor_ti(self, alternativas):
+        setor = alternativas["ChamadoCreate"]["properties"]["setor_destino"]
+
+        assert setor["enum"] == ["TI"]
+        assert setor["default"] == "TI"
+        assert "allOf" not in setor and "$ref" not in setor
+        # Omitir continua sendo o jeito de pedir TI.
+        assert "setor_destino" not in alternativas["ChamadoCreate"]["required"]
+
+    @pytest.mark.parametrize("campo", ["titulo", "categoria_id"])
+    def test_qualidade_documenta_titulo_e_categoria_como_proibidos(self, alternativas, campo):
+        qualidade = alternativas["ChamadoCreateQualidade"]
+        propriedade = qualidade["properties"][campo]
+
+        # `not: {}` recusa qualquer valor, null incluído — como o 422 real.
+        assert propriedade["not"] == {}
+        assert set(propriedade) <= {"not", "description", "title"}
+        assert campo not in qualidade["required"]
+
+    def test_as_alternativas_nao_se_sobrepoem(self, alternativas):
+        ti = alternativas["ChamadoCreate"]
+        qualidade = alternativas["ChamadoCreateQualidade"]
+
+        assert "setor_destino" in qualidade["required"]
+        assert qualidade["properties"]["setor_destino"]["const"] == "QUALIDADE"
+        assert "QUALIDADE" not in ti["properties"]["setor_destino"]["enum"]
+
+    def test_validacao_da_ti_nao_estreitou(self, cliente, dados, autenticar):
+        """
+        O schema documenta só TI, mas o tipo segue sendo o enum inteiro: o
+        erro de valor inválido continua listando os dois valores, como antes.
+        """
+        resposta = cliente.post(
+            "/api/v1/chamados/",
+            json=corpo_ti(dados, setor_destino="XYZ"),
+            headers=_comum(autenticar, dados),
+        )
+
+        assert resposta.status_code == 422
+        erro = next(e for e in resposta.json()["detail"] if e["loc"] == ["body", "setor_destino"])
+        assert erro["type"] == "enum"
+        assert erro["ctx"] == {"expected": "'TI' or 'QUALIDADE'"}

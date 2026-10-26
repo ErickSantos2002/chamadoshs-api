@@ -75,6 +75,32 @@ class ChamadoBase(BaseModel):
     prioridade: PrioridadeEnum = PrioridadeEnum.MEDIA
 
 
+def _documentar_so_ti(schema: dict) -> None:
+    """
+    No OpenAPI, `setor_destino` da TI aceita só TI.
+
+    O tipo continua sendo o enum inteiro, para o erro de valor inválido ser
+    o mesmo de antes. Mas QUALIDADE nunca chega a esta classe — o endpoint
+    leva esse valor ao corpo da Qualidade —, e documentá-lo aqui faria um
+    corpo valer pelas duas alternativas do `oneOf`.
+    """
+    schema.pop("allOf", None)
+    schema.pop("$ref", None)
+    schema.update(type="string", enum=[SetorDestinoEnum.TI.value])
+
+
+def _documentar_proibido(schema: dict) -> None:
+    """
+    No OpenAPI, campo que não pode ser enviado: `not: {}` recusa qualquer
+    valor, inclusive null — como a validação real.
+    """
+    descricao = schema.get("description")
+    schema.clear()
+    schema["not"] = {}
+    if descricao:
+        schema["description"] = descricao
+
+
 class ChamadoCreate(ChamadoBase):
     """
     Chamado novo para a TI: aqui o mínimo vale, porque não há legado para
@@ -98,6 +124,7 @@ class ChamadoCreate(ChamadoBase):
             "Setor que atende o chamado. Omitido = TI. Com QUALIDADE o corpo "
             "segue `ChamadoCreateQualidade`."
         ),
+        json_schema_extra=_documentar_so_ti,
     )
 
     @field_validator("setor_destino")
@@ -131,9 +158,17 @@ class ChamadoCreateQualidade(BaseModel):
     """
 
     setor_destino: Literal[SetorDestinoEnum.QUALIDADE]
-    titulo: Optional[Any] = Field(None, description="Não enviar: gerado da descrição.")
+    titulo: Optional[Any] = Field(
+        None,
+        description="Não enviar, nem como null (422): gerado da descrição.",
+        json_schema_extra=_documentar_proibido,
+    )
     descricao: DescricaoChamado
-    categoria_id: Optional[Any] = Field(None, description="Não enviar: a Qualidade não usa categoria.")
+    categoria_id: Optional[Any] = Field(
+        None,
+        description="Não enviar, nem como null (422): a Qualidade não usa categoria.",
+        json_schema_extra=_documentar_proibido,
+    )
     prioridade: PrioridadeEnum = PrioridadeEnum.MEDIA
     solicitante_id: int
     tecnico_responsavel_id: int = Field(
