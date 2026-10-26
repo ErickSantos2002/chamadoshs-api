@@ -113,6 +113,35 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   15 testes em `tests/test_exclusao_de_setor.py`.
 
 ### Adicionado
+- **Setor de destino do chamado — primeira etapa.** Coluna nova
+  `chamados.setor_destino` (`TI` | `QUALIDADE`, NOT NULL, padrão `TI`, CHECK
+  `chk_setor_destino`). Não é o setor de quem abre — esse continua em
+  `usuarios.setor_id`, intocado.
+
+  | Rota | Antes | Agora |
+  |---|---|---|
+  | Respostas de chamado (`GET`, `POST`, `PUT`, `PATCH`) | sem o campo | **`setor_destino`** |
+  | `POST /chamados` sem o campo | TI implícito | TI |
+  | `POST /chamados` com `"TI"` | campo ignorado | TI |
+  | `POST /chamados` com `"QUALIDADE"` | ignorado, virava TI | **422** |
+  | `POST /chamados` com valor fora da lista | ignorado | **422** |
+  | `GET /chamados?setor_destino=TI\|QUALIDADE` | parâmetro ignorado | filtra |
+  | `GET /chamados?setor_destino=<outro>` | ignorado | **422** |
+  | `PUT /chamados/{id}` com `setor_destino` | — | ignorado; o setor não muda |
+
+  **Abrir chamado para a Qualidade ainda não é possível**, e a recusa é de
+  propósito: as regras dela (atendente obrigatório e elegível, título derivado
+  da descrição) entram na etapa seguinte. Recusar com 422, em vez de deixar o
+  campo fora do schema, é o que impede um frontend adiantado de abrir chamados
+  da Qualidade que nasceriam como TI em silêncio — o Pydantic descarta campo
+  desconhecido sem avisar.
+
+  Nada muda para a TI: o frontend atual não manda o campo e recebe TI, e o
+  `tecnico_responsavel_id` enviado na criação continua sendo ignorado, como
+  sempre foi. Chamados existentes ficam TI pelo `DEFAULT` da coluna.
+
+  22 testes em `tests/test_setor_destino.py`.
+
 - **`GET /api/v1/health`**, público e barato o bastante para ser chamado a cada
   60s, para a faixa de status do frontend e para monitoramento externo.
 
@@ -504,16 +533,26 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   `POST`/`PUT`/`PATCH`/`DELETE` de setor passa a gravar nela, e com o banco
   antigo o código novo derruba a edição de setor inteira. `CREATE TABLE` puro,
   idempotente, sem nada a configurar no Easypanel.
+- **Migration `migrations/2026-10-26-add-setor-destino.sql`**: **backup antes**
+  (`pg_dump -Fc`), e aplicar **antes** de subir a imagem — o model declara a
+  coluna, e com o banco antigo todo `/api/v1/chamados` cai. Aditiva; rollback
+  da imagem depois dela é seguro. Repetível: já aplicada, só avisa; em estado
+  parcial (coluna sem o CHECK, tipo ou default diferente), para com erro sem
+  alterar nada. Rodar como script inteiro (DBeaver: Alt+X). Termina com as
+  consultas de verificação. Ainda não foi ensaiada em PostgreSQL real — fazer
+  em homologação ou num banco restaurado do backup antes de produção.
 
-- **ORDEM DO DEPLOY: uma migration pendente, não duas.**
+- **ORDEM DO DEPLOY: duas migrations pendentes.**
 
-  1. `migrations/2026-08-12-add-eventos-de-setor.sql` — a única que falta
-  2. subir a imagem
-  3. apontar o healthcheck do Easypanel para `/health`
+  1. `migrations/2026-08-12-add-eventos-de-setor.sql`
+  2. `migrations/2026-10-26-add-setor-destino.sql` (backup antes)
+  3. subir a imagem
+  4. apontar o healthcheck do Easypanel para `/health`
 
-  A de `eventos_de_conta` já foi aplicada em 12/08 (ver acima). Subir a imagem
-  sem a de setor quebra a edição de setor na primeira gravação; o arquivo termina
-  com as consultas de verificação.
+  As duas são independentes entre si. A de `eventos_de_conta` já foi aplicada
+  em 12/08 (ver acima). Subir a imagem sem a de setor quebra a edição de setor
+  na primeira gravação, e sem a de `setor_destino` quebra o CRUD de chamados;
+  os dois arquivos terminam com as consultas de verificação.
 
 - **Depois do deploy, para liberar os passos 3 e 4:**
   `docs/medir-migracao-do-frontend.sql`. São cinco `SELECT`s que respondem, pela
