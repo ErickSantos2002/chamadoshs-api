@@ -107,6 +107,15 @@ class ChamadoCreate(ChamadoBase):
         return valor
 
 
+class AtendenteQualidade(BaseModel):
+    """Opção do seletor de responsável da Qualidade: só o necessário para escolher."""
+
+    id: int
+    nome: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ChamadoUpdate(BaseModel):
     """
     Edição de chamado. Restrito a administrador ou técnico.

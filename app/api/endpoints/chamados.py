@@ -19,6 +19,7 @@ from app.models.usuario import Usuario
 from app.models.historico import HistoricoChamado
 from app.models.sla_config import SLAConfig
 from app.schemas.chamado import (
+    AtendenteQualidade,
     ChamadoAvaliacao,
     ChamadoCreate,
     ChamadoResponse,
@@ -27,6 +28,7 @@ from app.schemas.chamado import (
     StatusEnum,
 )
 from app.services.chamado_service import gerar_protocolo, registrar_historico, calcular_tempo_resolucao
+from app.services.qualidade_service import QualidadeIndisponivel, listar_atendentes
 from app.services.sla_service import calcular_sla
 from app.services.webhook_service import enviar_webhook_tecnico
 from app.utils.timezone import agora_brasilia
@@ -196,6 +198,26 @@ def listar_chamados(
     # entre páginas, e o skip/limit repetiria ou puliria registros.
     chamados = query.order_by(Chamado.id.desc()).offset(skip).limit(limit).all()
     return _anexar_sla(chamados, db)
+
+
+QUALIDADE_INDISPONIVEL = "Abertura de chamados para a Qualidade não está disponível neste ambiente"
+
+
+# Antes de `/{chamado_id}`: o FastAPI casa as rotas na ordem em que foram
+# declaradas, e depois dela "atendentes-qualidade" seria lido como id.
+@router.get("/atendentes-qualidade", response_model=List[AtendenteQualidade])
+def listar_atendentes_qualidade(db: Session = Depends(get_db)):
+    """
+    Quem pode ser escolhido como responsável de um chamado da Qualidade.
+
+    Aberto a qualquer perfil, como a abertura de chamado. Devolve só id e
+    nome — o necessário para o seletor —, e a regra é a mesma que a criação
+    aplica, então o que aparece aqui é aceito lá.
+    """
+    try:
+        return listar_atendentes(db)
+    except QualidadeIndisponivel:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=QUALIDADE_INDISPONIVEL)
 
 
 @router.get("/{chamado_id}", response_model=ChamadoResponse)
