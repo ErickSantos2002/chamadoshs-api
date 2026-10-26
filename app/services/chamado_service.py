@@ -25,6 +25,37 @@ def gerar_protocolo(db: Session) -> str:
     return f"CHAM-{ano_atual}-{numero:04d}"
 
 
+# Título gerado para os chamados da Qualidade, cujo formulário não tem título.
+TITULO_DERIVADO_MAXIMO = 80
+# Abaixo disto a primeira linha não diz nada sozinha ("Oi", "Bom dia"), e o
+# título passa a ser o começo da descrição inteira. É o mesmo mínimo do título
+# digitado na TI.
+TITULO_DERIVADO_MINIMO_DA_LINHA = 10
+
+
+def derivar_titulo(descricao: str) -> str:
+    """
+    Título a partir da descrição: a primeira linha com texto, ou — se ela for
+    curta demais para identificar o chamado — o começo da descrição inteira.
+
+    Espaços, tabs e quebras de linha repetidos viram um espaço só, e o
+    resultado tem no máximo `TITULO_DERIVADO_MAXIMO` caracteres, com "…" no
+    corte. Nunca vazio para uma descrição com algum texto, que é o que o
+    schema de criação garante.
+    """
+    linhas = (" ".join(linha.split()) for linha in descricao.splitlines())
+    primeira = next((linha for linha in linhas if linha), "")
+
+    if len(primeira) >= TITULO_DERIVADO_MINIMO_DA_LINHA:
+        titulo = primeira
+    else:
+        titulo = " ".join(descricao.split())
+
+    if len(titulo) <= TITULO_DERIVADO_MAXIMO:
+        return titulo
+    return titulo[: TITULO_DERIVADO_MAXIMO - 1].rstrip() + "…"
+
+
 def registrar_historico(
     db: Session,
     chamado_id: int,

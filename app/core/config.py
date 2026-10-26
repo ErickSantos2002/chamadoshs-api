@@ -1,5 +1,10 @@
+import logging
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -61,6 +66,37 @@ class Settings(BaseSettings):
     # configurada e o container reiniciado.
     WEBHOOK_TECNICO_TOKEN: str = ""
     WEBHOOK_TECNICO_HEADER: str = "X-Webhook-Token"
+
+    # Setor que atende os chamados de destino QUALIDADE (id em `setores`).
+    #
+    # Por ambiente, e nunca fixo no código: o id da Qualidade em produção não é
+    # o mesmo da homologação, e nome não serve — setor é renomeável.
+    #
+    # Sem valor, a abertura para a Qualidade fica fechada (503) e a TI segue
+    # normal. Valor vazio ou inválido vale como sem valor, em vez de impedir a
+    # API de subir: um erro de digitação aqui não pode tirar do ar a abertura
+    # de chamados da TI. O aviso vai para o log.
+    SETOR_QUALIDADE_ID: Optional[int] = None
+
+    @field_validator("SETOR_QUALIDADE_ID", mode="before")
+    @classmethod
+    def _setor_qualidade_id(cls, valor):
+        if valor is None:
+            return None
+        texto = str(valor).strip()
+        if not texto:
+            return None
+        try:
+            numero = int(texto)
+        except ValueError:
+            numero = 0
+        if numero <= 0:
+            logger.warning(
+                "SETOR_QUALIDADE_ID=%r não é um id válido; abertura para a Qualidade desligada",
+                valor,
+            )
+            return None
+        return numero
 
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:5173"

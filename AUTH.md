@@ -255,8 +255,10 @@ excluir setores e categorias; alterar prazos de SLA; excluir chamado;
 criar, editar e excluir tarefas recorrentes; criar e enxergar comentário
 interno.
 
-**Qualquer usuário autenticado:** leitura em geral; abrir chamado; cancelar
-o próprio chamado; comentar; registrar execução de tarefa recorrente.
+**Qualquer usuário autenticado:** leitura em geral; abrir chamado, para a TI
+ou para a Qualidade; listar os atendentes da Qualidade
+(`GET /chamados/atendentes-qualidade`, só `id` e `nome`); cancelar o próprio
+chamado; comentar; registrar execução de tarefa recorrente.
 
 ### Contrato de erro
 

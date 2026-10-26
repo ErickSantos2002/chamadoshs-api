@@ -1,5 +1,6 @@
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
-from typing import Annotated, Optional
+from pydantic_core import PydanticCustomError
+from typing import Annotated, Any, Literal, Optional
 from datetime import datetime
 from enum import Enum
 
@@ -74,8 +75,42 @@ class ChamadoBase(BaseModel):
     prioridade: PrioridadeEnum = PrioridadeEnum.MEDIA
 
 
+def _documentar_so_ti(schema: dict) -> None:
+    """
+    No OpenAPI, `setor_destino` da TI aceita só TI.
+
+    O tipo continua sendo o enum inteiro, para o erro de valor inválido ser
+    o mesmo de antes. Mas QUALIDADE nunca chega a esta classe — o endpoint
+    leva esse valor ao corpo da Qualidade —, e documentá-lo aqui faria um
+    corpo valer pelas duas alternativas do `oneOf`.
+    """
+    schema.pop("allOf", None)
+    schema.pop("$ref", None)
+    schema.update(type="string", enum=[SetorDestinoEnum.TI.value])
+
+
+def _documentar_proibido(schema: dict) -> None:
+    """
+    No OpenAPI, campo que não pode ser enviado: `not: {}` recusa qualquer
+    valor, inclusive null — como a validação real.
+    """
+    descricao = schema.get("description")
+    schema.clear()
+    schema["not"] = {}
+    if descricao:
+        schema["description"] = descricao
+
+
 class ChamadoCreate(ChamadoBase):
-    """Chamado novo: aqui o mínimo vale, porque não há legado para respeitar."""
+    """
+    Chamado novo para a TI: aqui o mínimo vale, porque não há legado para
+    respeitar.
+
+    A Qualidade tem corpo próprio, `ChamadoCreateQualidade`, e o endpoint
+    escolhe a classe pelo `setor_destino` recebido. Esta classe ficou como era
+    antes da Qualidade existir de propósito: são os erros de validação dela
+    que o frontend atual sabe exibir, e eles não podem mudar.
+    """
 
     titulo: TituloChamado
     descricao: DescricaoChamado
@@ -86,25 +121,74 @@ class ChamadoCreate(ChamadoBase):
     setor_destino: SetorDestinoEnum = Field(
         SetorDestinoEnum.TI,
         description=(
-            "Setor que atende o chamado. Por enquanto só TI é aceito na "
-            "criação: QUALIDADE é recusado com 422."
+            "Setor que atende o chamado. Omitido = TI. Com QUALIDADE o corpo "
+            "segue `ChamadoCreateQualidade`."
         ),
+        json_schema_extra=_documentar_so_ti,
     )
 
     @field_validator("setor_destino")
     @classmethod
-    def _qualidade_ainda_indisponivel(cls, valor: SetorDestinoEnum) -> SetorDestinoEnum:
+    def _so_ti(cls, valor: SetorDestinoEnum) -> SetorDestinoEnum:
         """
-        Recusa QUALIDADE até existirem as regras dela: atendente obrigatório e
-        elegível, título derivado da descrição.
+        Trava para quem usar esta classe fora do endpoint de criação.
 
-        Recusar, e não ignorar. Com o campo fora do schema, o Pydantic
-        descartaria QUALIDADE em silêncio e o chamado nasceria como TI — um
-        frontend adiantado abriria chamados no setor errado sem nenhum erro.
+        Pelo endpoint, QUALIDADE nunca chega aqui. Mas esta classe não valida
+        responsável nem gera título: se aceitasse QUALIDADE, nasceria um
+        chamado da Qualidade sem as regras dela.
         """
         if valor is SetorDestinoEnum.QUALIDADE:
-            raise ValueError("Chamados para a Qualidade ainda não estão disponíveis")
+            raise ValueError("Chamado da Qualidade usa o corpo ChamadoCreateQualidade")
         return valor
+
+
+class ChamadoCreateQualidade(BaseModel):
+    """
+    Chamado novo para a Qualidade.
+
+    O formulário da Qualidade não tem título nem categoria: o título é gerado
+    da descrição e a categoria fica nula. O responsável é obrigatório e passa
+    pela regra de elegibilidade no endpoint (`qualidade_service`).
+
+    `titulo` e `categoria_id` estão declarados só para serem recusados. É a
+    presença que conta, não o valor — até `null` é recusado: receber esses
+    campos indica um cliente montando o corpo errado, e ignorá-los em silêncio
+    esconderia o defeito. O validador só roda quando o campo vem na
+    requisição, porque o padrão não é validado.
+    """
+
+    setor_destino: Literal[SetorDestinoEnum.QUALIDADE]
+    titulo: Optional[Any] = Field(
+        None,
+        description="Não enviar, nem como null (422): gerado da descrição.",
+        json_schema_extra=_documentar_proibido,
+    )
+    descricao: DescricaoChamado
+    categoria_id: Optional[Any] = Field(
+        None,
+        description="Não enviar, nem como null (422): a Qualidade não usa categoria.",
+        json_schema_extra=_documentar_proibido,
+    )
+    prioridade: PrioridadeEnum = PrioridadeEnum.MEDIA
+    solicitante_id: int
+    tecnico_responsavel_id: int = Field(
+        ...,
+        description="Atendente da Qualidade. Opções em GET /chamados/atendentes-qualidade.",
+    )
+
+    @field_validator("titulo", "categoria_id", mode="before")
+    @classmethod
+    def _nao_se_aplica(cls, valor):
+        raise PydanticCustomError("nao_se_aplica", "Não se aplica a chamados da Qualidade")
+
+
+class AtendenteQualidade(BaseModel):
+    """Opção do seletor de responsável da Qualidade: só o necessário para escolher."""
+
+    id: int
+    nome: str
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChamadoUpdate(BaseModel):

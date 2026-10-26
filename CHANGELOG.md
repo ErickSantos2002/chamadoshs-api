@@ -123,24 +123,61 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   | Respostas de chamado (`GET`, `POST`, `PUT`, `PATCH`) | sem o campo | **`setor_destino`** |
   | `POST /chamados` sem o campo | TI implícito | TI |
   | `POST /chamados` com `"TI"` | campo ignorado | TI |
-  | `POST /chamados` com `"QUALIDADE"` | ignorado, virava TI | **422** |
+  | `POST /chamados` com `"QUALIDADE"` | ignorado, virava TI | corpo da Qualidade (ver segunda etapa) |
   | `POST /chamados` com valor fora da lista | ignorado | **422** |
   | `GET /chamados?setor_destino=TI\|QUALIDADE` | parâmetro ignorado | filtra |
   | `GET /chamados?setor_destino=<outro>` | ignorado | **422** |
   | `PUT /chamados/{id}` com `setor_destino` | — | ignorado; o setor não muda |
-
-  **Abrir chamado para a Qualidade ainda não é possível**, e a recusa é de
-  propósito: as regras dela (atendente obrigatório e elegível, título derivado
-  da descrição) entram na etapa seguinte. Recusar com 422, em vez de deixar o
-  campo fora do schema, é o que impede um frontend adiantado de abrir chamados
-  da Qualidade que nasceriam como TI em silêncio — o Pydantic descarta campo
-  desconhecido sem avisar.
 
   Nada muda para a TI: o frontend atual não manda o campo e recebe TI, e o
   `tecnico_responsavel_id` enviado na criação continua sendo ignorado, como
   sempre foi. Chamados existentes ficam TI pelo `DEFAULT` da coluna.
 
   22 testes em `tests/test_setor_destino.py`.
+
+- **Setor de destino do chamado — segunda etapa: abertura para a Qualidade.**
+  `POST /chamados` com `"setor_destino": "QUALIDADE"` passa a seguir o corpo
+  `ChamadoCreateQualidade`: descrição e prioridade com as regras de hoje,
+  **`tecnico_responsavel_id` obrigatório**, sem título e sem categoria. O
+  título é gerado da descrição (primeira linha com ao menos 10 caracteres, ou o
+  começo da descrição inteira; até 80, com "…" no corte) e a categoria fica
+  nula. Mandar `titulo` ou `categoria_id` para a Qualidade é 422
+  (`nao_se_aplica`), **mesmo com `null`**: o formulário dela não tem esses
+  campos, e recebê-los é sinal de cliente montando o corpo errado.
+
+  | Situação na abertura da Qualidade | Resposta |
+  |---|---|
+  | responsável ausente, nulo ou não inteiro; descrição ou prioridade inválida | **422** |
+  | responsável inexistente | **400** `Atendente não encontrado` |
+  | responsável inativo, conta de serviço ou de outro setor | **400** `Atendente não é elegível para a Qualidade` |
+  | `SETOR_QUALIDADE_ID` vazio, inválido, ou setor inexistente/inativo | **503** |
+
+  Elegível é a conta ativa, que não é conta de serviço e pertence ao setor da
+  Qualidade — **com qualquer perfil**. A regra mora num lugar só,
+  `app/services/qualidade_service.py`, e serve à criação e à rota nova
+  `GET /chamados/atendentes-qualidade` (qualquer autenticado; só `id` e `nome`;
+  503 sem configuração), para o seletor nunca oferecer quem a gravação recusa.
+
+  Toda recusa acontece antes do INSERT. Chamado da Qualidade **não dispara o
+  webhook da TI**. O histórico de abertura ganha o destino no texto, nos dois
+  setores: `… | Setor de destino: TI` e
+  `… | Setor de destino: Qualidade | Responsável: <nome>`.
+
+  **A TI não muda**: o corpo dela é validado pela mesma classe `ChamadoCreate`,
+  e os erros 422 conferem campo a campo com os de antes (testado). O corpo de
+  criação agora é validado à mão — o FastAPI não escolhe classe pelo valor de
+  um campo —, e por isso o schema dele no `/docs` é declarado à mão também
+  (`oneOf` das duas classes). `ChamadoCreate` deixa de aparecer em
+  `components/schemas` do OpenAPI; o frontend não gera tipos de lá.
+
+  Atender chamado da Qualidade (status, solução, reatribuição só entre
+  elegíveis) é a etapa seguinte. **Até ela e o frontend estarem no ar,
+  `SETOR_QUALIDADE_ID` fica vazio em produção** — ver ação no deploy.
+
+  88 testes novos em `tests/test_criacao_qualidade.py` e
+  `tests/test_atendentes_qualidade.py`; em `tests/test_setor_destino.py`, os 2
+  que travavam a Qualidade foram substituídos por 4 que garantem que ela nunca
+  vira TI.
 
 - **`GET /api/v1/health`**, público e barato o bastante para ser chamado a cada
   60s, para a faixa de status do frontend e para monitoramento externo.
@@ -553,6 +590,21 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   em 12/08 (ver acima). Subir a imagem sem a de setor quebra a edição de setor
   na primeira gravação, e sem a de `setor_destino` quebra o CRUD de chamados;
   os dois arquivos terminam com as consultas de verificação.
+
+- **`SETOR_QUALIDADE_ID`: deixar VAZIO (ou ausente) em produção.** Variável
+  nova, opcional; sem ela a API sobe normal, a TI funciona igual e a abertura
+  para a Qualidade responde 503. Só preencher — com o id conferido por
+  `SELECT id, nome, ativo FROM setores WHERE nome ILIKE 'qualidade';` — depois
+  que a etapa de atendimento da Qualidade e o frontend estiverem no ar. Antes
+  disso, um atendente com perfil Usuario receberia chamados que não consegue
+  atender. Valor inválido não derruba a API: desliga a Qualidade e avisa no log.
+
+- **Pendência n8n, antes de ligar a Qualidade:** conferir se algum fluxo do
+  n8n lê a tabela `chamados` direto do banco, em vez de só receber o webhook.
+  O webhook já não dispara para a Qualidade, mas um fluxo que consulte o banco
+  passaria a ver chamados da Qualidade como se fossem da TI, e precisaria do
+  filtro `setor_destino = 'TI'`. Não verificado — o n8n fica fora deste
+  repositório.
 
 - **Depois do deploy, para liberar os passos 3 e 4:**
   `docs/medir-migracao-do-frontend.sql`. São cinco `SELECT`s que respondem, pela
