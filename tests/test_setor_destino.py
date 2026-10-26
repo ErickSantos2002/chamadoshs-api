@@ -1,26 +1,28 @@
 """
-Setor de destino do chamado (TI | QUALIDADE) — primeira etapa.
+Setor de destino do chamado (TI | QUALIDADE): o campo, a resposta e o filtro.
 
-O chamado passa a dizer para qual setor ele vai. Esta etapa cria o campo, o
-expõe nas respostas e permite filtrar a listagem por ele. A abertura de
-chamado para a Qualidade NÃO existe ainda: ela depende de atendente
-obrigatório, título derivado e validação de elegibilidade, que entram na
-etapa seguinte.
+O chamado diz para qual setor ele vai. Este arquivo cobre o campo em si —
+padrão TI, valores aceitos, exposição nas respostas e filtro da listagem. A
+abertura para a Qualidade, com responsável e título derivado, está em
+`test_criacao_qualidade.py`.
 
-Enquanto isso, QUALIDADE na criação é recusada com 422. A alternativa óbvia
-— deixar o campo fora de `ChamadoCreate` — é pior do que parece: o Pydantic
-descarta campo desconhecido em silêncio, e um frontend que mandasse
-QUALIDADE antes da hora criaria o chamado como TI sem ninguém perceber.
+Um corpo com QUALIDADE nunca vira chamado de TI. Era isso que o bloqueio
+temporário da primeira etapa garantia, e continua garantido pelas regras
+definitivas: o Pydantic descartaria em silêncio um campo desconhecido, e um
+frontend com o corpo errado abriria chamados no setor errado sem ninguém
+perceber.
 
 `setor_destino` não é o setor do solicitante (`usuarios.setor_id`). Um não
 substitui o outro, e nenhum teste aqui depende do setor de quem abre.
 """
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.models import Chamado
+from app.schemas.chamado import ChamadoCreate
 
 TITULO_OK = "Impressora do RH não liga"
 DESCRICAO_OK = "Não dá sinal de vida desde ontem à tarde"
@@ -139,33 +141,69 @@ class TestPadraoTI:
         assert resposta.json()["setor_destino"] == "TI"
 
 
-class TestQualidadeBloqueadaAteAProximaEtapa:
-    def test_qualidade_na_criacao_e_422_e_nada_e_gravado(
-        self, cliente, dados, sessao, autenticar
+class TestQualidadeNuncaViraTI:
+    """
+    Substitui o bloqueio temporário da primeira etapa. A garantia que ele
+    protegia continua: um corpo com QUALIDADE nunca vira chamado de TI. O que
+    mudou é que agora ele é avaliado pelas regras da Qualidade, e o corpo de TI
+    abaixo (com título e categoria) é recusado por elas — as regras completas
+    estão em `test_criacao_qualidade.py`.
+    """
+
+    @pytest.mark.parametrize("perfil", ["comum", "tecnico"])
+    def test_corpo_de_ti_marcado_qualidade_e_422_e_nada_e_gravado(
+        self, cliente, qualidade, sessao, autenticar, perfil
     ):
+        headers = (_comum if perfil == "comum" else _tecnico)(autenticar, qualidade)
         antes = sessao.query(Chamado).count()
 
         resposta = cliente.post(
             "/api/v1/chamados/",
-            json=corpo(dados["comum_id"], setor_destino="QUALIDADE"),
+            json=corpo(
+                qualidade["comum_id"],
+                setor_destino="QUALIDADE",
+                tecnico_responsavel_id=qualidade["atendente_id"],
+            ),
+            headers=headers,
+        )
+
+        assert resposta.status_code == 422
+        assert {tuple(e["loc"]) for e in resposta.json()["detail"]} == {
+            ("body", "titulo"),
+            ("body", "categoria_id"),
+        }
+        assert sessao.query(Chamado).count() == antes
+
+    def test_qualidade_sem_configuracao_nao_cai_em_ti(self, cliente, dados, sessao, autenticar):
+        """Sem `SETOR_QUALIDADE_ID` (o padrão), a Qualidade fica fechada — e não vira TI."""
+        antes = sessao.query(Chamado).count()
+
+        resposta = cliente.post(
+            "/api/v1/chamados/",
+            json={
+                "setor_destino": "QUALIDADE",
+                "descricao": DESCRICAO_OK,
+                "solicitante_id": dados["comum_id"],
+                "tecnico_responsavel_id": dados["tecnico_id"],
+            },
             headers=_comum(autenticar, dados),
         )
 
-        assert _recusou_o_setor(resposta)
+        assert resposta.status_code == 503
         assert sessao.query(Chamado).count() == antes
 
-    def test_equipe_tambem_nao_cria_qualidade(self, cliente, dados, sessao, autenticar):
-        """O bloqueio não é de perfil: ninguém abre para a Qualidade antes das validações."""
-        antes = sessao.query(Chamado).count()
-
-        resposta = cliente.post(
-            "/api/v1/chamados/",
-            json=corpo(dados["comum_id"], setor_destino="QUALIDADE"),
-            headers=_tecnico(autenticar, dados),
-        )
-
-        assert _recusou_o_setor(resposta)
-        assert sessao.query(Chamado).count() == antes
+    def test_classe_da_ti_recusa_qualidade_fora_do_endpoint(self):
+        """
+        Pelo endpoint, QUALIDADE nunca chega a `ChamadoCreate`. A trava é para
+        quem usar a classe direto: ela não aplica as regras da Qualidade.
+        """
+        with pytest.raises(ValidationError):
+            ChamadoCreate(
+                titulo="Título de teste",
+                descricao=DESCRICAO_OK,
+                solicitante_id=1,
+                setor_destino="QUALIDADE",
+            )
 
 
 class TestValorInvalido:
@@ -224,7 +262,7 @@ class TestRespostaExpoeOCampo:
     def test_detalhe_de_chamado_da_qualidade_gravado_pelo_banco(
         self, cliente, dados, sessao, autenticar
     ):
-        """Ler um chamado da Qualidade já funciona; só a criação pela API espera a etapa 2."""
+        """Chamado da Qualidade gravado direto no banco: a leitura não depende da abertura."""
         (chamado_id,) = _semear(sessao, dados["comum_id"], ["QUALIDADE"])
 
         resposta = cliente.get(

@@ -1,9 +1,11 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Any, List, Optional
 from datetime import datetime
 
 from app.api.deps import (
@@ -22,13 +24,25 @@ from app.schemas.chamado import (
     AtendenteQualidade,
     ChamadoAvaliacao,
     ChamadoCreate,
+    ChamadoCreateQualidade,
     ChamadoResponse,
     ChamadoUpdate,
     SetorDestinoEnum,
     StatusEnum,
 )
-from app.services.chamado_service import gerar_protocolo, registrar_historico, calcular_tempo_resolucao
-from app.services.qualidade_service import QualidadeIndisponivel, listar_atendentes
+from app.services.chamado_service import (
+    calcular_tempo_resolucao,
+    derivar_titulo,
+    gerar_protocolo,
+    registrar_historico,
+)
+from app.services.qualidade_service import (
+    AtendenteInelegivel,
+    AtendenteNaoEncontrado,
+    QualidadeIndisponivel,
+    buscar_atendente,
+    listar_atendentes,
+)
 from app.services.sla_service import calcular_sla
 from app.services.webhook_service import enviar_webhook_tecnico
 from app.utils.timezone import agora_brasilia
@@ -231,19 +245,95 @@ def buscar_chamado(chamado_id: int, db: Session = Depends(get_db)):
     return _anexar_sla([chamado], db)[0]
 
 
-@router.post("/", response_model=ChamadoResponse, status_code=status.HTTP_201_CREATED)
+def _validar_corpo_de_criacao(corpo: Any):
+    """
+    Valida o corpo com a classe do setor pedido.
+
+    Feito à mão porque o FastAPI não escolhe a classe pelo valor de um campo.
+    A escolha olha o `setor_destino` cru: só QUALIDADE exato vai para a
+    classe da Qualidade; todo o resto — inclusive valor inválido ou corpo que
+    nem é objeto — passa por `ChamadoCreate` e recebe dela exatamente o erro
+    que recebia antes. O 422 é montado como o FastAPI monta (`loc` com "body"
+    na frente), para o frontend não perceber diferença.
+    """
+    eh_qualidade = (
+        isinstance(corpo, dict)
+        and corpo.get("setor_destino") == SetorDestinoEnum.QUALIDADE.value
+    )
+    modelo = ChamadoCreateQualidade if eh_qualidade else ChamadoCreate
+    try:
+        return modelo.model_validate(corpo, from_attributes=True)
+    except ValidationError as exc:
+        raise RequestValidationError(
+            [{**erro, "loc": ("body", *erro["loc"])} for erro in exc.errors()],
+            body=corpo,
+        )
+
+
+def _schema_do_corpo(modelo) -> dict:
+    # Os enums referenciados já estão em `components` pelo ChamadoResponse.
+    schema = modelo.model_json_schema(ref_template="#/components/schemas/{model}")
+    schema.pop("$defs", None)
+    return schema
+
+
+# O corpo é recebido como `Any`, então o OpenAPI não o descreveria sozinho.
+CORPO_DE_CRIACAO_OPENAPI = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "application/json": {
+                "schema": {
+                    "oneOf": [
+                        _schema_do_corpo(ChamadoCreate),
+                        _schema_do_corpo(ChamadoCreateQualidade),
+                    ],
+                },
+            },
+        },
+    },
+}
+
+
+@router.post(
+    "/",
+    response_model=ChamadoResponse,
+    status_code=status.HTTP_201_CREATED,
+    openapi_extra=CORPO_DE_CRIACAO_OPENAPI,
+)
 def criar_chamado(
-    chamado_data: ChamadoCreate,
+    corpo: Any = Body(...),
     current_user: Usuario = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Cria um novo chamado.
+    Cria um novo chamado, para a TI ou para a Qualidade.
 
     O solicitante vem do token, não do corpo: aceitar do cliente permitia
     abrir chamado em nome de qualquer pessoa. Administrador continua podendo
     abrir em nome de outro, informando solicitante_id.
+
+    TI: corpo `ChamadoCreate`, como sempre foi. Qualidade: corpo
+    `ChamadoCreateQualidade` — título gerado da descrição, sem categoria,
+    responsável obrigatório e elegível, e sem o webhook da TI.
     """
+    chamado_data = _validar_corpo_de_criacao(corpo)
+    eh_qualidade = isinstance(chamado_data, ChamadoCreateQualidade)
+
+    # Antes de qualquer gravação: recusa aqui não deixa chamado pela metade.
+    if eh_qualidade:
+        try:
+            atendente = buscar_atendente(db, chamado_data.tecnico_responsavel_id)
+        except QualidadeIndisponivel:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=QUALIDADE_INDISPONIVEL)
+        except AtendenteNaoEncontrado:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Atendente não encontrado")
+        except AtendenteInelegivel:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Atendente não é elegível para a Qualidade",
+            )
+
     if is_admin(current_user) and chamado_data.solicitante_id:
         solicitante_id = chamado_data.solicitante_id
     else:
@@ -253,16 +343,33 @@ def criar_chamado(
     protocolo = gerar_protocolo(db)
 
     # Criar chamado
-    chamado = Chamado(
-        protocolo=protocolo,
-        solicitante_id=solicitante_id,
-        categoria_id=chamado_data.categoria_id,
-        titulo=chamado_data.titulo,
-        descricao=chamado_data.descricao,
-        prioridade=chamado_data.prioridade,
-        setor_destino=chamado_data.setor_destino.value,
-        status="Aberto"
-    )
+    if eh_qualidade:
+        chamado = Chamado(
+            protocolo=protocolo,
+            solicitante_id=solicitante_id,
+            categoria_id=None,
+            titulo=derivar_titulo(chamado_data.descricao),
+            descricao=chamado_data.descricao,
+            prioridade=chamado_data.prioridade,
+            setor_destino=SetorDestinoEnum.QUALIDADE.value,
+            tecnico_responsavel_id=atendente.id,
+            status="Aberto"
+        )
+        destino = f"Setor de destino: Qualidade | Responsável: {atendente.nome}"
+    else:
+        # Na TI o responsável é definido depois, pela equipe: um
+        # `tecnico_responsavel_id` no corpo é ignorado, como sempre foi.
+        chamado = Chamado(
+            protocolo=protocolo,
+            solicitante_id=solicitante_id,
+            categoria_id=chamado_data.categoria_id,
+            titulo=chamado_data.titulo,
+            descricao=chamado_data.descricao,
+            prioridade=chamado_data.prioridade,
+            setor_destino=SetorDestinoEnum.TI.value,
+            status="Aberto"
+        )
+        destino = "Setor de destino: TI"
 
     db.add(chamado)
     db.commit()
@@ -274,18 +381,21 @@ def criar_chamado(
         chamado_id=chamado.id,
         usuario_id=solicitante_id,
         acao="Abertura de chamado",
-        descricao=f"Chamado aberto com protocolo {protocolo}",
+        descricao=f"Chamado aberto com protocolo {protocolo} | {destino}",
         status_novo="Aberto"
     )
 
-    # Enviar webhook para notificação (sem técnico = "Sem atribuição")
-    enviar_webhook_tecnico(
-        db=db,
-        protocolo=protocolo,
-        titulo=chamado.titulo,
-        tecnico_id=None,
-        acao="criado"
-    )
+    # Enviar webhook para notificação (sem técnico = "Sem atribuição").
+    # Só TI: o fluxo do n8n avisa a equipe de TI, e um chamado da Qualidade
+    # lá viraria notificação para quem não o atende.
+    if not eh_qualidade:
+        enviar_webhook_tecnico(
+            db=db,
+            protocolo=protocolo,
+            titulo=chamado.titulo,
+            tecnico_id=None,
+            acao="criado"
+        )
 
     return _anexar_sla([chamado], db)[0]
 
