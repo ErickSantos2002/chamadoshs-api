@@ -171,13 +171,80 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   `components/schemas` do OpenAPI; o frontend não gera tipos de lá.
 
   Atender chamado da Qualidade (status, solução, reatribuição só entre
-  elegíveis) é a etapa seguinte. **Até ela e o frontend estarem no ar,
+  elegíveis) é a terceira etapa, logo abaixo. **Até o frontend estar no ar,
   `SETOR_QUALIDADE_ID` fica vazio em produção** — ver ação no deploy.
 
   88 testes novos em `tests/test_criacao_qualidade.py` e
   `tests/test_atendentes_qualidade.py`; em `tests/test_setor_destino.py`, os 2
   que travavam a Qualidade foram substituídos por 4 que garantem que ela nunca
   vira TI.
+
+- **Setor de destino do chamado — terceira etapa: atendimento da Qualidade.**
+
+  **`PATCH /chamados/{id}/atendimento`, rota nova.** O responsável atual de um
+  chamado da Qualidade muda o status e registra a solução, **com qualquer
+  perfil** — quem atende a Qualidade costuma ter perfil Usuario, e o `PUT`
+  continua da equipe. A autorização é pelo chamado e por quem pede, relidos do
+  banco a cada requisição, e **perfil não dá passe**: administrador e técnico
+  só atendem por aqui se forem da Qualidade e responsáveis; fora disso, usam o
+  `PUT` como sempre.
+
+  O corpo tem só `status` (`Em Andamento`, `Aguardando` ou `Resolvido`) e
+  `solucao` — obrigatória ao resolver (mínimo de 10, como no resto do sistema)
+  e recusada nos outros status, até como `null`. **Qualquer outro campo é 422
+  `extra_forbidden`**: a rota não muda responsável, prioridade, categoria nem
+  campo administrativo, e o responsável nunca vem do corpo.
+
+  As transições são as das ações rápidas do frontend: Aberto → Em Andamento;
+  Em Andamento → Aguardando ou Resolvido; Aguardando → Em Andamento ou
+  Resolvido; Resolvido ou Fechado → Em Andamento (reabrir). O `PUT` da equipe
+  continua sem restrição de transição.
+
+  | Situação no atendimento | Resposta |
+  |---|---|
+  | corpo inválido, campo extra, destino Aberto/Fechado, solução ausente/curta/fora de Resolvido | **422** |
+  | chamado inexistente | **404** |
+  | chamado da TI | **403** `Esta rota atende só chamados da Qualidade` |
+  | `SETOR_QUALIDADE_ID` vazio, inválido, ou setor inexistente/inativo | **503** |
+  | quem pede não é elegível (inativo, conta de serviço, outro setor) | **403** `Você não atende a Qualidade` |
+  | elegível, mas o chamado está com outra pessoa | **403** `Só o responsável atual pode atender este chamado` |
+  | chamado cancelado ou arquivado | **409** |
+  | transição fora da tabela, inclusive para o mesmo status | **409** `Transição de X para Y não permitida` |
+  | atendimento válido | **200** com o chamado (e o SLA) |
+
+  Resolução e histórico seguem exatamente o `PUT`: `data_resolucao` e
+  `tempo_resolucao_minutos` são os da primeira resolução e reabrir não os
+  apaga; o histórico grava `Alteração de status` / `Status alterado de X para
+  Y` com `status_anterior` e `status_novo`, que é de onde o SLA tira pausas,
+  primeira resposta e resolução. **SLA e dashboards não mudam.** Diferente do
+  `PUT`, chamado e histórico vão **no mesmo commit**: uma falha antes dele
+  desfaz os dois (testado com falha injetada). Sem webhook.
+
+  **Concorrência:** a rota lê o chamado com `SELECT … FOR UPDATE`, para o
+  responsável anterior não conseguir atender depois de a equipe reatribuir o
+  chamado. Os testes rodam em SQLite, que ignora a cláusula: eles provam que a
+  consulta pede o lock e que a autorização usa o responsável atual, **não a
+  disputa real entre duas transações** — ela precisa de ensaio em PostgreSQL.
+
+  **Reatribuição pelo `PUT`, só no chamado da Qualidade.** Trocar o
+  responsável passa pela mesma regra da abertura: 400 `Atendente não
+  encontrado`, 400 `Atendente não é elegível para a Qualidade`, 503 sem
+  configuração, e **400 `Chamado da Qualidade precisa de responsável`** para
+  desatribuir. Tudo antes de gravar qualquer campo do corpo. Só a mudança é
+  validada: reenviar o responsável atual — o que a edição completa do
+  frontend faz em todo salvamento — passa sem revalidar, para o chamado não
+  ficar ineditável quando o responsável sai da Qualidade. A reatribuição da
+  Qualidade **não dispara o webhook da TI** e, como em qualquer setor, não
+  grava histórico. `require_staff` não muda: a atendente com perfil Usuario
+  continua sem `PUT`.
+
+  **A TI não muda**: mesmo validador de responsável (que segue aceitando conta
+  inativa, como antes — não é escopo corrigir), mesmo webhook, mesmas
+  mensagens, sem depender da configuração da Qualidade. Testado.
+
+  124 testes novos em `tests/test_atendimento_qualidade.py` e
+  `tests/test_reatribuicao_qualidade.py`; fixture `chamado_qualidade` em
+  `tests/conftest.py`. Sem migration e sem variável nova.
 
 - **`GET /api/v1/health`**, público e barato o bastante para ser chamado a cada
   60s, para a faixa de status do frontend e para monitoramento externo.
@@ -595,9 +662,15 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   nova, opcional; sem ela a API sobe normal, a TI funciona igual e a abertura
   para a Qualidade responde 503. Só preencher — com o id conferido por
   `SELECT id, nome, ativo FROM setores WHERE nome ILIKE 'qualidade';` — depois
-  que a etapa de atendimento da Qualidade e o frontend estiverem no ar. Antes
-  disso, um atendente com perfil Usuario receberia chamados que não consegue
-  atender. Valor inválido não derruba a API: desliga a Qualidade e avisa no log.
+  que o frontend da Qualidade (abertura e atendimento) estiver no ar. Antes
+  disso, um atendente com perfil Usuario receberia chamados sem tela para
+  atendê-los. Valor inválido não derruba a API: desliga a Qualidade e avisa no log.
+
+- **Antes de ligar a Qualidade: ensaiar a concorrência do atendimento em
+  PostgreSQL.** Duas sessões: uma faz o `SELECT … FOR UPDATE` do atendimento e
+  segura a transação; a outra reatribui o chamado pelo `PUT` e deve esperar.
+  Na ordem inversa, o atendimento deve esperar a reatribuição e responder 403.
+  A suíte não prova isso — roda em SQLite, que ignora o lock.
 
 - **Pendência n8n, antes de ligar a Qualidade:** conferir se algum fluxo do
   n8n lê a tabela `chamados` direto do banco, em vez de só receber o webhook.

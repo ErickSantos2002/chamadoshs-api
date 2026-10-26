@@ -260,6 +260,18 @@ ou para a Qualidade; listar os atendentes da Qualidade
 (`GET /chamados/atendentes-qualidade`, só `id` e `nome`); cancelar o próprio
 chamado; comentar; registrar execução de tarefa recorrente.
 
+**Pelo chamado, não pelo perfil:** `PATCH /chamados/{id}/atendimento` — mudar
+o status e registrar a solução de um chamado da Qualidade. Só o responsável
+atual, e só se a conta for elegível para a Qualidade (ativa, não conta de
+serviço, do setor configurado), conferido no banco a cada requisição. Perfil
+não dá passe: administrador e técnico que não cumprem as duas condições
+recebem 403 e usam o `PUT`. O corpo aceita só `status` e `solucao`; qualquer
+outro campo é 422. Avaliar (`PATCH /chamados/{id}/avaliar`, só o solicitante)
+segue o mesmo princípio.
+
+No `PUT` (equipe), trocar o responsável de um chamado da Qualidade só é aceito
+para conta elegível — a mesma regra da abertura. Na TI, nada muda.
+
 ### Contrato de erro
 
 - **401** — token ausente, inválido ou expirado. O frontend redireciona para
