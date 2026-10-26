@@ -22,6 +22,7 @@ from app.models.historico import HistoricoChamado
 from app.models.sla_config import SLAConfig
 from app.schemas.chamado import (
     AtendenteQualidade,
+    ChamadoAtendimento,
     ChamadoAvaliacao,
     ChamadoCreate,
     ChamadoCreateQualidade,
@@ -35,13 +36,17 @@ from app.services.chamado_service import (
     derivar_titulo,
     gerar_protocolo,
     registrar_historico,
+    transicao_permitida,
 )
 from app.services.qualidade_service import (
     AtendenteInelegivel,
     AtendenteNaoEncontrado,
+    ChamadoForaDaQualidade,
+    NaoEhResponsavel,
     QualidadeIndisponivel,
     buscar_atendente,
     listar_atendentes,
+    verificar_atendimento,
 )
 from app.services.sla_service import calcular_sla
 from app.services.webhook_service import enviar_webhook_tecnico
@@ -123,6 +128,44 @@ def _validar_tecnico_responsavel(db: Session, chamado_data: ChamadoUpdate) -> No
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Não é possível atribuir um chamado a uma conta de serviço",
+        )
+
+
+def _validar_responsavel_da_qualidade(db: Session, chamado: Chamado, chamado_data: ChamadoUpdate) -> None:
+    """
+    Reatribuição de chamado da Qualidade: só entre atendentes elegíveis.
+
+    Valida a MUDANÇA, não o campo. A edição completa do frontend reenvia o
+    responsável atual em todo salvamento, e revalidá-lo deixaria ineditável o
+    chamado cujo responsável saiu da Qualidade depois de atribuído — o mesmo
+    motivo de `_validar_tecnico_responsavel` olhar só o que veio na requisição.
+
+    Desatribuir é recusado: chamado da Qualidade nasce com responsável, e sem
+    ele ninguém poderia atendê-lo pela rota de atendimento.
+    """
+    if "tecnico_responsavel_id" not in chamado_data.model_fields_set:
+        return
+
+    novo_id = chamado_data.tecnico_responsavel_id
+    if novo_id == chamado.tecnico_responsavel_id:
+        return
+
+    if novo_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Chamado da Qualidade precisa de responsável",
+        )
+
+    try:
+        buscar_atendente(db, novo_id)
+    except QualidadeIndisponivel:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=QUALIDADE_INDISPONIVEL)
+    except AtendenteNaoEncontrado:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Atendente não encontrado")
+    except AtendenteInelegivel:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Atendente não é elegível para a Qualidade",
         )
 
 
@@ -418,7 +461,12 @@ def atualizar_chamado(
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
 
     # Depois do 404: chamado inexistente é 404, não 400 por causa do técnico.
-    _validar_tecnico_responsavel(db, chamado_data)
+    # Antes de qualquer `setattr`: recusa aqui não grava nenhum campo.
+    eh_qualidade = chamado.setor_destino == SetorDestinoEnum.QUALIDADE.value
+    if eh_qualidade:
+        _validar_responsavel_da_qualidade(db, chamado, chamado_data)
+    else:
+        _validar_tecnico_responsavel(db, chamado_data)
 
     # Armazenar status anterior e técnico anterior para histórico e webhook
     status_anterior = chamado.status
@@ -453,8 +501,13 @@ def atualizar_chamado(
             status_novo=chamado_data.status.value
         )
 
-    # Enviar webhook se o técnico foi atribuído ou alterado
-    if chamado_data.tecnico_responsavel_id is not None and tecnico_anterior != chamado_data.tecnico_responsavel_id:
+    # Enviar webhook se o técnico foi atribuído ou alterado. Só TI, como na
+    # abertura: o fluxo do n8n avisa a equipe de TI.
+    if (
+        not eh_qualidade
+        and chamado_data.tecnico_responsavel_id is not None
+        and tecnico_anterior != chamado_data.tecnico_responsavel_id
+    ):
         enviar_webhook_tecnico(
             db=db,
             protocolo=chamado.protocolo,
@@ -525,6 +578,110 @@ def avaliar_chamado(
         ),
     )
 
+    return _anexar_sla([chamado], db)[0]
+
+
+def _consulta_do_atendimento(db: Session, chamado_id: int):
+    """
+    O chamado a atender, com a linha travada (`SELECT ... FOR UPDATE`).
+
+    O lock vale até o commit do atendimento. Uma reatribuição pelo PUT que
+    grave antes faz esta leitura esperar e ver o responsável novo; uma que
+    chegue depois espera o atendimento terminar. O SQLite dos testes ignora a
+    cláusula — a disputa real só se prova em PostgreSQL.
+    """
+    return db.query(Chamado).filter(Chamado.id == chamado_id).with_for_update()
+
+
+@router.patch("/{chamado_id}/atendimento", response_model=ChamadoResponse)
+def atender_chamado(
+    chamado_id: int,
+    atendimento: ChamadoAtendimento,
+    current_user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Atendimento de chamado da Qualidade pelo responsável atual.
+
+    Existe porque quem atende a Qualidade costuma ter perfil comum, e o PUT é
+    da equipe — por ele se mexe em responsável, prioridade e categoria. Aqui
+    só o status, pelas transições das ações rápidas do frontend, e a solução
+    ao resolver.
+
+    Autorização pelo chamado e por quem pede, relidos do banco nesta
+    requisição (`verificar_atendimento`); perfil não dá passe. Cancelado e
+    arquivado estão fora do fluxo de atendimento (409). Sem webhook: o fluxo
+    do n8n é da TI.
+
+    Chamado e histórico vão no mesmo commit — o do `registrar_historico`,
+    que é o único desta rota e também o que solta o lock. Qualquer falha
+    antes dele desfaz os dois.
+    """
+    chamado = _consulta_do_atendimento(db, chamado_id).first()
+    if not chamado:
+        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+
+    try:
+        verificar_atendimento(db, chamado, current_user)
+    except ChamadoForaDaQualidade:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Esta rota atende só chamados da Qualidade",
+        )
+    except QualidadeIndisponivel:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=QUALIDADE_INDISPONIVEL)
+    except AtendenteInelegivel:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Você não atende a Qualidade")
+    except NaoEhResponsavel:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Só o responsável atual pode atender este chamado",
+        )
+
+    # 409, como no /avaliar: o corpo está certo, o que impede é o estado.
+    for marca in ("cancelado", "arquivado"):
+        if getattr(chamado, marca):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Chamado {marca} não pode ser atendido",
+            )
+
+    status_anterior = chamado.status
+    status_novo = atendimento.status.value
+    if not transicao_permitida(status_anterior, status_novo):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Transição de {status_anterior} para {status_novo} não permitida",
+        )
+
+    try:
+        chamado.status = status_novo
+        if atendimento.status is StatusEnum.RESOLVIDO:
+            chamado.solucao = atendimento.solucao
+            # Mesma regra do PUT: data e tempo são os da primeira resolução,
+            # e reabrir não os apaga.
+            if not chamado.data_resolucao:
+                chamado.data_resolucao = agora_brasilia()
+                chamado.tempo_resolucao_minutos = calcular_tempo_resolucao(
+                    chamado.data_abertura,
+                    chamado.data_resolucao
+                )
+
+        # Mesmo formato do PUT: é dele que o SLA lê pausas e resolução.
+        registrar_historico(
+            db=db,
+            chamado_id=chamado.id,
+            usuario_id=current_user.id,
+            acao="Alteração de status",
+            descricao=f"Status alterado de {status_anterior} para {status_novo}",
+            status_anterior=status_anterior,
+            status_novo=status_novo
+        )
+    except Exception:
+        db.rollback()
+        raise
+
+    db.refresh(chamado)
     return _anexar_sla([chamado], db)[0]
 
 

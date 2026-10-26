@@ -2,7 +2,7 @@
 Quem pode atender chamado da Qualidade.
 
 Fonte única da regra de elegibilidade: a lista de atendentes oferecida ao
-formulário, a validação do responsável na abertura e, na etapa seguinte, a
+formulário, a validação do responsável na abertura e na reatribuição, e a
 autorização de quem atende passam todas por `eh_elegivel`. Duas cópias da
 regra seriam o caminho para o seletor oferecer alguém que a gravação recusa.
 
@@ -21,6 +21,7 @@ from typing import List
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models.chamado import Chamado
 from app.models.setor import Setor
 from app.models.usuario import Usuario
 
@@ -37,6 +38,18 @@ class AtendenteNaoEncontrado(Exception):
 
 class AtendenteInelegivel(Exception):
     """A conta existe, mas não pode atender a Qualidade."""
+
+
+class ChamadoForaDaQualidade(Exception):
+    """O chamado é de outro setor de destino."""
+
+
+class NaoEhResponsavel(Exception):
+    """Quem pede atende a Qualidade, mas o chamado está com outra pessoa."""
+
+
+# Valor de `chamados.setor_destino` (CHECK `chk_setor_destino`).
+SETOR_DESTINO_QUALIDADE = "QUALIDADE"
 
 
 def setor_qualidade(db: Session) -> Setor:
@@ -98,3 +111,27 @@ def buscar_atendente(db: Session, usuario_id: int) -> Usuario:
     if not eh_elegivel(usuario, setor):
         raise AtendenteInelegivel()
     return usuario
+
+
+def verificar_atendimento(db: Session, chamado: Chamado, usuario: Usuario) -> None:
+    """
+    Se `usuario` pode atender `chamado` pela rota de atendimento.
+
+    Tudo vem do banco, relido na requisição: o chamado carregado pelo
+    endpoint e a conta autenticada. Nada do corpo entra na decisão — o
+    responsável é o que está gravado, não o que o cliente disser.
+
+    Perfil não dá passe: administrador e técnico só atendem por aqui se forem
+    da Qualidade e responsáveis, como qualquer um. Fora disso, usam o PUT.
+
+    A ordem decide a resposta: setor do chamado, configuração, elegibilidade
+    de quem pede e, por último, a responsabilidade.
+    """
+    if chamado.setor_destino != SETOR_DESTINO_QUALIDADE:
+        raise ChamadoForaDaQualidade()
+
+    setor = setor_qualidade(db)
+    if not eh_elegivel(usuario, setor):
+        raise AtendenteInelegivel()
+    if chamado.tecnico_responsavel_id != usuario.id:
+        raise NaoEhResponsavel()

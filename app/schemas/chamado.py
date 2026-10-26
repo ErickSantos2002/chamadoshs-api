@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 from typing import Annotated, Any, Literal, Optional
 from datetime import datetime
@@ -231,6 +231,38 @@ class ChamadoAvaliacao(BaseModel):
     """
 
     avaliacao: int = Field(..., ge=1, le=5)
+
+
+class ChamadoAtendimento(BaseModel):
+    """
+    Corpo do PATCH /chamados/{id}/atendimento, do responsável da Qualidade.
+
+    Pelo mesmo motivo de `ChamadoAvaliacao`, só o que essa pessoa pode mudar:
+    o status e a solução. `extra="forbid"` faz qualquer outro campo virar 422
+    em vez de ser ignorado — quem manda responsável ou prioridade por aqui
+    está tentando o que a rota não faz, e precisa saber.
+
+    Aberto e Fechado não são destinos: nenhuma ação de atendimento leva a
+    eles. A transição a partir do status atual é conferida no endpoint, que
+    conhece o chamado.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal[StatusEnum.EM_ANDAMENTO, StatusEnum.AGUARDANDO, StatusEnum.RESOLVIDO]
+    solucao: Optional[SolucaoChamado] = Field(
+        None, description="Obrigatória ao resolver; não enviar nos outros status."
+    )
+
+    @model_validator(mode="after")
+    def _solucao_so_ao_resolver(self) -> "ChamadoAtendimento":
+        if self.status is StatusEnum.RESOLVIDO:
+            if self.solucao is None:
+                raise PydanticCustomError("solucao_obrigatoria", "Informe a solução para resolver o chamado")
+        elif "solucao" in self.model_fields_set:
+            # Até null é recusado: solução fora da resolução é corpo errado.
+            raise PydanticCustomError("solucao_nao_se_aplica", "Solução só é enviada ao resolver o chamado")
+        return self
 
 
 class ChamadoResponse(ChamadoBase):

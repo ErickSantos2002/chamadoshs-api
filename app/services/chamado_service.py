@@ -56,6 +56,23 @@ def derivar_titulo(descricao: str) -> str:
     return titulo[: TITULO_DERIVADO_MAXIMO - 1].rstrip() + "…"
 
 
+# Transições da rota de atendimento da Qualidade: as mesmas ações rápidas do
+# frontend (`AcoesRapidas.tsx` e `ChamadoDetalhes.tsx`). O PUT da equipe não
+# passa por aqui e continua sem restrição de transição.
+TRANSICOES_DO_ATENDIMENTO = {
+    "Aberto": frozenset({"Em Andamento"}),
+    "Em Andamento": frozenset({"Aguardando", "Resolvido"}),
+    "Aguardando": frozenset({"Em Andamento", "Resolvido"}),
+    "Resolvido": frozenset({"Em Andamento"}),
+    "Fechado": frozenset({"Em Andamento"}),
+}
+
+
+def transicao_permitida(status_atual: str, status_novo: str) -> bool:
+    """Se o atendimento pode levar o chamado de um status ao outro."""
+    return status_novo in TRANSICOES_DO_ATENDIMENTO.get(status_atual, frozenset())
+
+
 def registrar_historico(
     db: Session,
     chamado_id: int,
