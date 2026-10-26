@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 from typing import Annotated, Optional
 from datetime import datetime
 from enum import Enum
@@ -47,6 +47,13 @@ class StatusEnum(str, Enum):
     FECHADO = "Fechado"
 
 
+class SetorDestinoEnum(str, Enum):
+    """Setor que atende o chamado. Valores iguais aos do CHECK `chk_setor_destino`."""
+
+    TI = "TI"
+    QUALIDADE = "QUALIDADE"
+
+
 class ChamadoBase(BaseModel):
     """
     Campos comuns de entrada e de saída.
@@ -73,6 +80,31 @@ class ChamadoCreate(ChamadoBase):
     titulo: TituloChamado
     descricao: DescricaoChamado
     solicitante_id: int
+    # Fora de `ChamadoBase` pelo mesmo motivo dos mínimos de texto: a regra de
+    # entrada abaixo não pode valer para a resposta. Omitir o campo é o jeito
+    # de pedir TI — é o que o frontend atual faz.
+    setor_destino: SetorDestinoEnum = Field(
+        SetorDestinoEnum.TI,
+        description=(
+            "Setor que atende o chamado. Por enquanto só TI é aceito na "
+            "criação: QUALIDADE é recusado com 422."
+        ),
+    )
+
+    @field_validator("setor_destino")
+    @classmethod
+    def _qualidade_ainda_indisponivel(cls, valor: SetorDestinoEnum) -> SetorDestinoEnum:
+        """
+        Recusa QUALIDADE até existirem as regras dela: atendente obrigatório e
+        elegível, título derivado da descrição.
+
+        Recusar, e não ignorar. Com o campo fora do schema, o Pydantic
+        descartaria QUALIDADE em silêncio e o chamado nasceria como TI — um
+        frontend adiantado abriria chamados no setor errado sem nenhum erro.
+        """
+        if valor is SetorDestinoEnum.QUALIDADE:
+            raise ValueError("Chamados para a Qualidade ainda não estão disponíveis")
+        return valor
 
 
 class ChamadoUpdate(BaseModel):
@@ -122,6 +154,7 @@ class ChamadoResponse(ChamadoBase):
     protocolo: str
     solicitante_id: int
     status: StatusEnum
+    setor_destino: SetorDestinoEnum
     urgencia: Optional[UrgenciaEnum] = None
     tecnico_responsavel_id: Optional[int] = None
     solucao: Optional[str] = None

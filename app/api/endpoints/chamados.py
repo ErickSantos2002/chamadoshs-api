@@ -23,6 +23,7 @@ from app.schemas.chamado import (
     ChamadoCreate,
     ChamadoResponse,
     ChamadoUpdate,
+    SetorDestinoEnum,
     StatusEnum,
 )
 from app.services.chamado_service import gerar_protocolo, registrar_historico, calcular_tempo_resolucao
@@ -163,6 +164,9 @@ def listar_chamados(
     status: str = None,
     solicitante_id: int = None,
     tecnico_id: int = None,
+    # Tipado pelo enum, e não `str` como `status`: valor fora da lista vira
+    # 422, em vez de uma lista vazia que se leria como "não há chamados".
+    setor_destino: Optional[SetorDestinoEnum] = None,
     incluir_cancelados: bool = False,
     incluir_arquivados: bool = False,
     db: Session = Depends(get_db)
@@ -185,6 +189,8 @@ def listar_chamados(
         query = query.filter(Chamado.solicitante_id == solicitante_id)
     if tecnico_id:
         query = query.filter(Chamado.tecnico_responsavel_id == tecnico_id)
+    if setor_destino:
+        query = query.filter(Chamado.setor_destino == setor_destino.value)
 
     # Ordem determinística: sem ela o Postgres não garante a mesma sequência
     # entre páginas, e o skip/limit repetiria ou puliria registros.
@@ -232,6 +238,7 @@ def criar_chamado(
         titulo=chamado_data.titulo,
         descricao=chamado_data.descricao,
         prioridade=chamado_data.prioridade,
+        setor_destino=chamado_data.setor_destino.value,
         status="Aberto"
     )
 
