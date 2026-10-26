@@ -126,6 +126,44 @@ def _validar_tecnico_responsavel(db: Session, chamado_data: ChamadoUpdate) -> No
         )
 
 
+def _validar_responsavel_da_qualidade(db: Session, chamado: Chamado, chamado_data: ChamadoUpdate) -> None:
+    """
+    Reatribuição de chamado da Qualidade: só entre atendentes elegíveis.
+
+    Valida a MUDANÇA, não o campo. A edição completa do frontend reenvia o
+    responsável atual em todo salvamento, e revalidá-lo deixaria ineditável o
+    chamado cujo responsável saiu da Qualidade depois de atribuído — o mesmo
+    motivo de `_validar_tecnico_responsavel` olhar só o que veio na requisição.
+
+    Desatribuir é recusado: chamado da Qualidade nasce com responsável, e sem
+    ele ninguém poderia atendê-lo pela rota de atendimento.
+    """
+    if "tecnico_responsavel_id" not in chamado_data.model_fields_set:
+        return
+
+    novo_id = chamado_data.tecnico_responsavel_id
+    if novo_id == chamado.tecnico_responsavel_id:
+        return
+
+    if novo_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Chamado da Qualidade precisa de responsável",
+        )
+
+    try:
+        buscar_atendente(db, novo_id)
+    except QualidadeIndisponivel:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=QUALIDADE_INDISPONIVEL)
+    except AtendenteNaoEncontrado:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Atendente não encontrado")
+    except AtendenteInelegivel:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Atendente não é elegível para a Qualidade",
+        )
+
+
 def _anexar_sla(chamados: List[Chamado], db: Session) -> List[Chamado]:
     """
     Calcula e anexa o bloco `sla` a cada chamado.
@@ -418,7 +456,12 @@ def atualizar_chamado(
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
 
     # Depois do 404: chamado inexistente é 404, não 400 por causa do técnico.
-    _validar_tecnico_responsavel(db, chamado_data)
+    # Antes de qualquer `setattr`: recusa aqui não grava nenhum campo.
+    eh_qualidade = chamado.setor_destino == SetorDestinoEnum.QUALIDADE.value
+    if eh_qualidade:
+        _validar_responsavel_da_qualidade(db, chamado, chamado_data)
+    else:
+        _validar_tecnico_responsavel(db, chamado_data)
 
     # Armazenar status anterior e técnico anterior para histórico e webhook
     status_anterior = chamado.status
@@ -453,8 +496,13 @@ def atualizar_chamado(
             status_novo=chamado_data.status.value
         )
 
-    # Enviar webhook se o técnico foi atribuído ou alterado
-    if chamado_data.tecnico_responsavel_id is not None and tecnico_anterior != chamado_data.tecnico_responsavel_id:
+    # Enviar webhook se o técnico foi atribuído ou alterado. Só TI, como na
+    # abertura: o fluxo do n8n avisa a equipe de TI.
+    if (
+        not eh_qualidade
+        and chamado_data.tecnico_responsavel_id is not None
+        and tecnico_anterior != chamado_data.tecnico_responsavel_id
+    ):
         enviar_webhook_tecnico(
             db=db,
             protocolo=chamado.protocolo,

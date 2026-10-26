@@ -173,6 +173,32 @@ def qualidade(dados, sessao, monkeypatch):
 
 
 @pytest.fixture
+def chamado_qualidade(qualidade, sessao):
+    """
+    Um chamado da Qualidade, aberto e atribuído à atendente de perfil comum.
+
+    Fixture à parte, e não dentro de `qualidade`: os testes que contam
+    chamados com a Qualidade configurada continuam vendo o banco de antes.
+    """
+    chamado = Chamado(
+        id=101,
+        protocolo="CH-TESTE-101",
+        solicitante_id=qualidade["comum_id"],
+        categoria_id=None,
+        titulo="Laudo do lote 42 sem assinatura",
+        descricao="O laudo do lote 42 chegou sem a assinatura do responsável",
+        status="Aberto",
+        prioridade="Média",
+        setor_destino="QUALIDADE",
+        tecnico_responsavel_id=qualidade["atendente_id"],
+    )
+    sessao.add(chamado)
+    sessao.commit()
+
+    return {**qualidade, "chamado_qualidade_id": chamado.id}
+
+
+@pytest.fixture
 def cliente(sessao):
     """TestClient com o get_db apontando para o banco em memória."""
     def _get_db_de_teste():
