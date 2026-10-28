@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, TIMESTAMP, ForeignKey, Text, CheckConstraint, Boolean
+from sqlalchemy import Column, Integer, String, TIMESTAMP, ForeignKey, Text, CheckConstraint, Boolean, FetchedValue, text
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from app.core.database import Base
@@ -51,12 +51,31 @@ class Chamado(Base):
     created_at = Column(TIMESTAMP, default=agora_brasilia)
     updated_at = Column(TIMESTAMP, default=agora_brasilia, onupdate=agora_brasilia)
 
+    # Versão do chamado, base do controle otimista (API-4a). Quem a mantém é o
+    # trigger_chamados_versao do PostgreSQL — 1 no INSERT, +1 a cada UPDATE que
+    # muda algum dado persistido (ver migrations/2026-10-28-add-versao-chamados.sql).
+    # O ORM não a incrementa: sem `onupdate` e sem `version_id_col`.
+    #
+    # `server_onupdate=FetchedValue()` não gera valor nenhum: só avisa o ORM de
+    # que o banco muda a coluna no UPDATE, e ela expira depois de cada flush.
+    # Sem isso, o objeto em memória seguiria com a versão de antes do UPDATE
+    # até alguém relê-lo. No SQLite dos testes não há trigger, e a versão fica
+    # em 1 — o que lá se prova é o contrato, não a contagem.
+    versao = Column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+        server_onupdate=FetchedValue(),
+    )
+
     # Constraints
     __table_args__ = (
         CheckConstraint("prioridade IN ('Baixa', 'Média', 'Alta', 'Crítica')", name='chk_prioridade'),
         CheckConstraint("urgencia IS NULL OR urgencia IN ('Não Urgente', 'Normal', 'Urgente', 'Muito Urgente')", name='chk_urgencia'),
         CheckConstraint("status IN ('Aberto', 'Em Andamento', 'Aguardando', 'Resolvido', 'Fechado')", name='chk_status'),
         CheckConstraint("setor_destino IN ('TI', 'QUALIDADE')", name='chk_setor_destino'),
+        CheckConstraint("versao >= 1", name='chk_chamados_versao'),
     )
 
     # Relationships

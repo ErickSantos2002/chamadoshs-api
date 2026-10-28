@@ -284,6 +284,9 @@ class ChamadoResponse(ChamadoBase):
     data_resolucao: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+    # Versão do chamado (API-4a): sobe a cada mudança gravada. Só leitura por
+    # enquanto — nenhuma escrita a confere ainda (`versao_esperada` é API-4b).
+    versao: int
     sla: Optional[SLAInfo] = None
 
     model_config = ConfigDict(from_attributes=True)
