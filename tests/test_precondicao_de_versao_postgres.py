@@ -18,28 +18,23 @@ Os testes de concorrência são pontuais: um caso por rota, para mostrar que a
 conferência é feita sob o lock. A matriz completa de duas sessões é da API-4c.
 """
 
-import threading
-import time
-
 import psycopg2
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 import main
 from app.api.deps import get_db
 from app.api.endpoints import chamados as chamados_endpoint
 from app.services.versao_service import VERSAO_AUSENTE, VERSAO_DESATUALIZADA
+from concorrencia import LOCK_TIMEOUT_DOS_TESTES, em_paralelo, esperar_bloqueio, pid_de, sql_emitido
 from pg_descartavel import banco_descartavel, executar_script, ler
 
 pytestmark = pytest.mark.postgres
 
 SOLUCAO_OK = "Laudo reemitido com a assinatura do responsável"
 QUALIDADE = 101
-# Teto de espera por lock, na sessão da API: um teste que trave falha em
-# segundos, em vez de pendurar a suíte.
-LOCK_TIMEOUT_MS = 3000
 
 
 @pytest.fixture(scope="module")
@@ -60,7 +55,9 @@ def url_do_banco(banco_novo):
 def sessao(url_do_banco):
     engine = create_engine(
         url_do_banco.replace("postgresql://", "postgresql+psycopg2://", 1),
-        connect_args={"options": f"-c lock_timeout={LOCK_TIMEOUT_MS}"},
+        # Teto de espera por lock, bem acima das esperas do teste (`concorrencia.py`):
+        # nenhum teste depende de o lock_timeout estourar.
+        connect_args={"options": f"-c lock_timeout={LOCK_TIMEOUT_DOS_TESTES}"},
     )
     db = sessionmaker(autocommit=False, autoflush=False, bind=engine)()
     try:
@@ -321,49 +318,6 @@ class TestAtomicidade:
         assert _estado(sessao, QUALIDADE) == antes
 
 
-def _esperar_alguem_bloqueado(url, limite=LOCK_TIMEOUT_MS / 1000 - 0.5):
-    """Até alguma sessão deste banco estar esperando lock. Falha se não acontecer."""
-    vigia = psycopg2.connect(url)
-    vigia.autocommit = True
-    try:
-        fim = time.monotonic() + limite
-        while time.monotonic() < fim:
-            with vigia.cursor() as cur:
-                cur.execute(
-                    "SELECT count(*) FROM pg_stat_activity "
-                    "WHERE datname = current_database() AND wait_event_type = 'Lock'"
-                )
-                if cur.fetchone()[0]:
-                    return
-            time.sleep(0.05)
-        pytest.fail("a requisição não ficou esperando o lock")
-    finally:
-        vigia.close()
-
-
-def _em_paralelo(funcao):
-    """Roda a requisição numa thread e devolve como esperar o resultado."""
-    resultado = {}
-
-    def alvo():
-        try:
-            resultado["resposta"] = funcao()
-        except Exception as exc:  # devolvido ao teste, que decide
-            resultado["erro"] = exc
-
-    thread = threading.Thread(target=alvo)
-    thread.start()
-
-    def esperar():
-        thread.join(timeout=LOCK_TIMEOUT_MS / 1000 + 5)
-        assert not thread.is_alive(), "a requisição não terminou"
-        if "erro" in resultado:
-            raise resultado["erro"]
-        return resultado["resposta"]
-
-    return esperar
-
-
 class TestConcorrenciaPontual:
     """
     Outra transação trava a linha, grava e só então solta. A escrita da API,
@@ -392,8 +346,8 @@ class TestConcorrenciaPontual:
     def test_espera_o_lock_e_recusa_com_a_versao_gravada_pela_outra(
         self, cliente, chamado_qualidade, sessao, autenticar, url_do_banco, outra_pessoa_grava, escrita
     ):
-        esperar = _em_paralelo(lambda: escrita(cliente, autenticar, chamado_qualidade))
-        _esperar_alguem_bloqueado(url_do_banco)
+        esperar = em_paralelo(lambda: escrita(cliente, autenticar, chamado_qualidade))
+        esperar_bloqueio(url_do_banco, pid_de(outra_pessoa_grava))
         outra_pessoa_grava.commit()
 
         resposta = esperar()
@@ -408,24 +362,37 @@ class TestConcorrenciaPontual:
     def test_a_ti_nao_pede_o_lock(self, cliente, dados, sessao, autenticar, outra_conexao):
         """
         `FOR KEY SHARE` na outra transação não barra o UPDATE comum, mas barra
-        o `FOR UPDATE`. A TI grava sem esperar; a Qualidade, no mesmo cenário,
-        espera até o lock_timeout.
+        o `FOR UPDATE`. A prova é de estrutura, não de relógio: a TI não manda
+        `FOR UPDATE` nenhum, e grava com o lock da outra transação de pé.
         """
         with outra_conexao.cursor() as cur:
             cur.execute("SELECT id FROM chamados WHERE id = %s FOR KEY SHARE", (dados["chamado_id"],))
 
-        inicio = time.monotonic()
-        resposta = _put(cliente, dados["chamado_id"], {"status": "Em Andamento"}, _admin(autenticar, dados))
+        # Em thread: se a TI passar a pedir o lock, o teste falha pela espera
+        # dele, e não pelo lock_timeout da sessão.
+        with sql_emitido(sessao.get_bind()) as comandos:
+            resposta = em_paralelo(
+                lambda: _put(cliente, dados["chamado_id"], {"status": "Em Andamento"}, _admin(autenticar, dados))
+            )()
         assert resposta.status_code == 200
-        assert time.monotonic() - inicio < LOCK_TIMEOUT_MS / 1000 / 2
+        assert comandos and not [c for c in comandos if "FOR UPDATE" in c.upper()]
 
-    def test_a_qualidade_pede_o_lock(self, cliente, chamado_qualidade, sessao, autenticar, outra_conexao):
+    def test_a_qualidade_pede_o_lock(
+        self, cliente, chamado_qualidade, sessao, autenticar, url_do_banco, outra_conexao
+    ):
+        """No mesmo cenário, a Qualidade espera: o banco a mostra bloqueada pela outra transação."""
         with outra_conexao.cursor() as cur:
             cur.execute("SELECT id FROM chamados WHERE id = %s FOR KEY SHARE", (QUALIDADE,))
 
-        with pytest.raises(OperationalError, match="lock"):
-            _put(cliente, QUALIDADE, {"prioridade": "Alta", "versao_esperada": 1}, _admin(autenticar, chamado_qualidade))
-        assert _estado(sessao, QUALIDADE)["prioridade"] == "Média"
+        esperar = em_paralelo(
+            lambda: _put(cliente, QUALIDADE, {"prioridade": "Alta", "versao_esperada": 1}, _admin(autenticar, chamado_qualidade))
+        )
+        esperar_bloqueio(url_do_banco, pid_de(outra_conexao))
+        outra_conexao.rollback()
+
+        resposta = esperar()
+        assert resposta.status_code == 200, resposta.text
+        assert _estado(sessao, QUALIDADE)["prioridade"] == "Alta"
 
     @pytest.mark.parametrize(
         "corpo,status",
