@@ -73,7 +73,7 @@ def transicao_permitida(status_atual: str, status_novo: str) -> bool:
     return status_novo in TRANSICOES_DO_ATENDIMENTO.get(status_atual, frozenset())
 
 
-def registrar_historico(
+def adicionar_historico(
     db: Session,
     chamado_id: int,
     usuario_id: int,
@@ -83,7 +83,10 @@ def registrar_historico(
     status_novo: str = None
 ):
     """
-    Registra uma ação no histórico do chamado
+    Põe uma ação do histórico na transação atual, SEM commit.
+
+    Para as escritas da Qualidade (API-4b), em que chamado e histórico saem no
+    mesmo commit e uma falha desfaz os dois. Quem chama faz o commit.
     """
     historico = HistoricoChamado(
         chamado_id=chamado_id,
@@ -94,6 +97,27 @@ def registrar_historico(
         status_novo=status_novo
     )
     db.add(historico)
+    return historico
+
+
+def registrar_historico(
+    db: Session,
+    chamado_id: int,
+    usuario_id: int,
+    acao: str,
+    descricao: str = None,
+    status_anterior: str = None,
+    status_novo: str = None
+):
+    """
+    Registra uma ação no histórico do chamado, com commit próprio.
+
+    O commit leva junto o que mais estiver pendente na sessão — é assim que o
+    atendimento grava chamado e histórico juntos.
+    """
+    historico = adicionar_historico(
+        db, chamado_id, usuario_id, acao, descricao, status_anterior, status_novo
+    )
     db.commit()
     return historico
 

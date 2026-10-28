@@ -20,6 +20,7 @@ import main
 from app.api.endpoints import chamados as chamados_endpoint
 from app.models import Chamado, Usuario
 from app.models.historico import HistoricoChamado
+from versao_do_cliente import com_versao_lida
 
 
 def _tecnico(autenticar, dados):
@@ -51,6 +52,8 @@ def _historicos(sessao, chamado_id):
 
 
 def _put(cliente, chamado_id, corpo, headers):
+    """Com a versão lida na Qualidade; na TI, o corpo como veio (ver `versao_do_cliente`)."""
+    corpo = com_versao_lida(cliente, chamado_id, corpo, headers)
     return cliente.put(f"/api/v1/chamados/{chamado_id}", json=corpo, headers=headers)
 
 

@@ -30,6 +30,7 @@ from app.api.endpoints import chamados as chamados_endpoint
 from app.models import Chamado, Usuario
 from app.models.historico import HistoricoChamado
 from app.models.sla_config import SLAConfig
+from versao_do_cliente import com_versao_lida
 
 SOLUCAO_OK = "Laudo reemitido com a assinatura do responsável"
 
@@ -39,6 +40,8 @@ def _atendente(autenticar, d):
 
 
 def _patch(cliente, chamado_id, corpo, headers):
+    """Com a versão lida, como o cliente da API-4b (ver `versao_do_cliente`)."""
+    corpo = com_versao_lida(cliente, chamado_id, corpo, headers)
     return cliente.patch(f"/api/v1/chamados/{chamado_id}/atendimento", json=corpo, headers=headers)
 
 
@@ -674,10 +677,13 @@ class TestConcorrencia:
         cabecalho_anterior = _atendente(autenticar, d)
         assert _patch(cliente, d["chamado_qualidade_id"], INICIAR, cabecalho_anterior).status_code == 200
 
+        tecnico = autenticar(d["tecnico_id"], "tecnico.teste", "Tecnico")
         reatribuicao = cliente.put(
             f"/api/v1/chamados/{d['chamado_qualidade_id']}",
-            json={"tecnico_responsavel_id": d["tecnico_da_qualidade_id"]},
-            headers=autenticar(d["tecnico_id"], "tecnico.teste", "Tecnico"),
+            json=com_versao_lida(
+                cliente, d["chamado_qualidade_id"], {"tecnico_responsavel_id": d["tecnico_da_qualidade_id"]}, tecnico
+            ),
+            headers=tecnico,
         )
         assert reatribuicao.status_code == 200
 

@@ -10,8 +10,10 @@ Também prova que o `schema_chamados.sql` (banco novo) e a migration (banco
 existente) instalam o mesmo trigger: a migration, rodada num banco criado pelo
 schema, responde "já aplicada".
 
-Nenhuma rota confere a versão ainda (API-4b). Aqui só se prova que ela sobe
-uma vez por escrita e que a resposta devolve a versão já gravada.
+Aqui só se prova que ela sobe uma vez por escrita e que a resposta devolve a
+versão já gravada. As escritas da Qualidade mandam `versao_esperada`, que
+desde a API-4b elas exigem; a conferência em si está em
+`test_precondicao_de_versao_postgres.py`.
 """
 
 import pytest
@@ -167,19 +169,30 @@ class TestPelasRotas:
         atendente = autenticar(d["atendente_id"], "ana.qualidade", "Usuario")
         url = f"/api/v1/chamados/{d['chamado_qualidade_id']}/atendimento"
 
-        _responde_e_grava(cliente.patch(url, json={"status": "Em Andamento"}, headers=atendente), sessao, 2)
+        # A versão de cada escrita é a devolvida pela anterior, como o cliente faz.
+        primeira = _responde_e_grava(
+            cliente.patch(url, json={"status": "Em Andamento", "versao_esperada": 1}, headers=atendente), sessao, 2
+        )
         _responde_e_grava(
-            cliente.patch(url, json={"status": "Resolvido", "solucao": SOLUCAO_OK}, headers=atendente), sessao, 3
+            cliente.patch(
+                url,
+                json={"status": "Resolvido", "solucao": SOLUCAO_OK, "versao_esperada": primeira["versao"]},
+                headers=atendente,
+            ),
+            sessao,
+            3,
         )
 
     def test_atendimento_recusado_nao_sobe(self, cliente, chamado_qualidade, sessao, autenticar):
         d = chamado_qualidade
         resposta = cliente.patch(
             f"/api/v1/chamados/{d['chamado_qualidade_id']}/atendimento",
-            json={"status": "Resolvido", "solucao": SOLUCAO_OK},  # Aberto → Resolvido: 409
+            # Aberto → Resolvido: 409 de transição, com a versão certa.
+            json={"status": "Resolvido", "solucao": SOLUCAO_OK, "versao_esperada": 1},
             headers=autenticar(d["atendente_id"], "ana.qualidade", "Usuario"),
         )
         assert resposta.status_code == 409
+        assert "codigo" not in resposta.json()
         assert _no_banco(sessao, d["chamado_qualidade_id"]) == 1
 
     def test_reatribuicao_da_qualidade_sobe_1(self, cliente, chamado_qualidade, sessao, autenticar):
@@ -187,7 +200,7 @@ class TestPelasRotas:
         _responde_e_grava(
             cliente.put(
                 f"/api/v1/chamados/{d['chamado_qualidade_id']}",
-                json={"tecnico_responsavel_id": d["tecnico_da_qualidade_id"]},
+                json={"tecnico_responsavel_id": d["tecnico_da_qualidade_id"], "versao_esperada": 1},
                 headers=_admin(autenticar, d),
             ),
             sessao,

@@ -32,6 +32,7 @@ from app.schemas.chamado import (
     StatusEnum,
 )
 from app.services.chamado_service import (
+    adicionar_historico,
     calcular_tempo_resolucao,
     derivar_titulo,
     gerar_protocolo,
@@ -49,6 +50,7 @@ from app.services.qualidade_service import (
     verificar_atendimento,
 )
 from app.services.sla_service import calcular_sla
+from app.services.versao_service import conferir_versao
 from app.services.webhook_service import enviar_webhook_tecnico
 from app.utils.timezone import agora_brasilia
 
@@ -453,6 +455,16 @@ def atualizar_chamado(
 ):
     """
     Atualiza um chamado existente. Restrito a administrador ou técnico.
+
+    Chamado da Qualidade (API-4b): a linha é travada e relida antes de
+    qualquer conferência, `versao_esperada` é obrigatória (428) e tem de bater
+    com a versão travada (409), e chamado e histórico saem num commit só. Sem
+    webhook, como sempre.
+
+    TI: o fluxo de antes, sem trava. `versao_esperada` é opcional e, se vier,
+    é conferida — mas sem o lock a conferência não impede uma escrita que
+    entre entre ela e o UPDATE. Na TI é só um aviso de dado velho, não
+    controle de concorrência.
     """
     _avisar_usuario_id_depreciado("atualizar_chamado", usuario_id, current_user)
 
@@ -460,9 +472,21 @@ def atualizar_chamado(
     if not chamado:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
 
+    # O setor sai da leitura sem trava: o PUT não o altera, e nenhuma rota o
+    # altera depois da criação. A trava fica só para a Qualidade.
+    eh_qualidade = chamado.setor_destino == SetorDestinoEnum.QUALIDADE.value
+    if eh_qualidade:
+        # Relê a linha com `SELECT ... FOR UPDATE`: daqui até o commit, ninguém
+        # mais escreve nela, e tudo abaixo — versão, responsável atual, status
+        # anterior do histórico — é o estado travado, não o da primeira leitura.
+        db.refresh(chamado, with_for_update=True)
+
+    # Antes da validação dos campos: com a versão velha, o cliente decidiu
+    # sobre um chamado que já não é este, e o que precisa saber é isso.
+    conferir_versao(chamado, chamado_data.versao_esperada, obrigatoria=eh_qualidade)
+
     # Depois do 404: chamado inexistente é 404, não 400 por causa do técnico.
     # Antes de qualquer `setattr`: recusa aqui não grava nenhum campo.
-    eh_qualidade = chamado.setor_destino == SetorDestinoEnum.QUALIDADE.value
     if eh_qualidade:
         _validar_responsavel_da_qualidade(db, chamado, chamado_data)
     else:
@@ -486,6 +510,28 @@ def atualizar_chamado(
                 chamado.data_resolucao
             )
 
+    if eh_qualidade:
+        # Um commit para chamado e histórico, que também solta o lock. Qualquer
+        # falha antes dele desfaz os dois: não fica chamado alterado sem o
+        # histórico de que o SLA depende, nem histórico de mudança que não houve.
+        try:
+            if chamado_data.status and status_anterior != chamado_data.status:
+                adicionar_historico(
+                    db=db,
+                    chamado_id=chamado.id,
+                    usuario_id=current_user.id,
+                    acao="Alteração de status",
+                    descricao=f"Status alterado de {status_anterior} para {chamado_data.status.value}",
+                    status_anterior=status_anterior,
+                    status_novo=chamado_data.status.value
+                )
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        db.refresh(chamado)
+        return _anexar_sla([chamado], db)[0]
+
     db.commit()
     db.refresh(chamado)
 
@@ -502,7 +548,8 @@ def atualizar_chamado(
         )
 
     # Enviar webhook se o técnico foi atribuído ou alterado. Só TI, como na
-    # abertura: o fluxo do n8n avisa a equipe de TI.
+    # abertura: o fluxo do n8n avisa a equipe de TI. (A Qualidade já saiu
+    # acima; o `not eh_qualidade` fica como trava, caso o fluxo mude.)
     if (
         not eh_qualidade
         and chamado_data.tecnico_responsavel_id is not None
@@ -616,6 +663,11 @@ def atender_chamado(
     Chamado e histórico vão no mesmo commit — o do `registrar_historico`,
     que é o único desta rota e também o que solta o lock. Qualquer falha
     antes dele desfaz os dois.
+
+    `versao_esperada` é obrigatória (API-4b) e conferida na linha travada,
+    depois da autorização. Ordem das recusas: 401/403 do token; 422 do corpo;
+    404; 403/503 da autorização pelo chamado; 428 sem versão; 409 de versão;
+    409 de cancelado/arquivado; 409 de transição.
     """
     chamado = _consulta_do_atendimento(db, chamado_id).first()
     if not chamado:
@@ -637,6 +689,11 @@ def atender_chamado(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Só o responsável atual pode atender este chamado",
         )
+
+    # Depois da autorização: o 409 de versão diz a versão atual, e quem não
+    # atende o chamado não tem por que sabê-la. Antes das recusas de estado:
+    # com a versão velha, a pessoa decidiu sobre um estado que já mudou.
+    conferir_versao(chamado, atendimento.versao_esperada, obrigatoria=True)
 
     # 409, como no /avaliar: o corpo está certo, o que impede é o estado.
     for marca in ("cancelado", "arquivado"):
