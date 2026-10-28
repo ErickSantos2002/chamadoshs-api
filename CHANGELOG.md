@@ -112,6 +112,86 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
   15 testes em `tests/test_exclusao_de_setor.py`.
 
+- **Escritas em chamado da Qualidade exigem a versão (API-4b).** O PUT, o
+  atendimento e as três marcas (cancelar, arquivar, desarquivar) de um chamado
+  da Qualidade passam a recusar escrita sem `versao_esperada` (**428**) ou com
+  uma versão que não é mais a gravada (**409**). É o controle otimista sobre
+  a coluna `versao` da API-4a: quem salvou por cima de uma mudança que não viu
+  recebe 409 e recarrega, em vez de apagá-la em silêncio.
+
+  **Isto é a parte da API.** Até o frontend mandar a versão (FE-4), um cliente
+  da Qualidade recebe 428 em toda escrita — por isso a Qualidade continua
+  desligada (`SETOR_QUALIDADE_ID` vazio). O M-1 (ação rápida desfazendo o
+  status gravado pelo atendente) e o B-1 **não estão resolvidos**: dependem do
+  FE-4 enviar a versão e da matriz de concorrência da API-4c.
+
+  | Rota (chamado da Qualidade) | Sem `versao_esperada` | Versão diferente da gravada | Versão certa |
+  |---|---|---|---|
+  | `PUT /api/v1/chamados/{id}` | 428 | 409 | grava, versão +1 |
+  | `PATCH /{id}/atendimento` | 428 | 409 | grava, versão +1 |
+  | `PATCH /{id}/cancelar`, `/arquivar`, `/desarquivar` | 428 (sem corpo também) | 409 | grava, versão +1 |
+
+  Corpos:
+
+  - `versao_esperada`: inteiro **≥ 1**, estrito. `0`, negativo, `true`,
+    `"5"`, `5.0` e `null` explícito são **422** — `null` é corpo errado, não
+    versão faltando. A versão a mandar é a `versao` da última resposta lida.
+  - PUT e atendimento: o campo entra no corpo de sempre. O atendimento segue
+    com `extra="forbid"`.
+  - Marcas: corpo **opcional** `{"versao_esperada": N}`; campo desconhecido é
+    ignorado. Sem corpo, a TI segue como sempre.
+
+  O 409 de versão tem corpo próprio, com o código para distingui-lo dos
+  outros 409 (transição, cancelado, arquivado), que não mudaram:
+
+  ```json
+  {
+    "detail": "Este chamado foi alterado por outra pessoa. Atualize e tente de novo.",
+    "codigo": "versao_desatualizada",
+    "versao_atual": 8
+  }
+  ```
+
+  O 428 é `{"detail": "Informe a versão do chamado"}`.
+
+  **Ordem das recusas:** 401/403 do token e do perfil → 422 do corpo → 404 →
+  403/503 da autorização pelo chamado (atendimento: elegível e responsável;
+  cancelar: solicitante ou equipe) → **428** → **409 de versão** → recusas de
+  estado (400 "já está cancelado/arquivado", 400 de responsável, 409 de
+  transição). Quem não pode escrever no chamado recebe o 403 e **nunca** a
+  `versao_atual`.
+
+  **Como a conferência é feita.** Na Qualidade a linha é relida com
+  `SELECT … FOR UPDATE` antes de conferir, e a escrita sai na mesma
+  transação: duas escritas simultâneas com a mesma versão não passam as duas —
+  a segunda espera o lock, vê a versão nova e recebe 409. Recusa (428/409) não
+  executa UPDATE nenhum e não deixa a linha travada. No PUT e nas marcas da
+  Qualidade, chamado e histórico passam a sair **num commit só** (antes eram
+  dois), com o status anterior lido sob o lock; o atendimento já era assim.
+  Nenhum webhook na Qualidade, como antes.
+
+  **TI: sem mudança para quem não manda a versão.** Sem trava nova, sem campo
+  obrigatório, histórico com o commit próprio de sempre. Se `versao_esperada`
+  vier, é conferida (409 se diverge) — mas **sem lock**, então isso na TI é
+  aviso de dado velho, não controle de concorrência: uma escrita que entre
+  entre a conferência e o UPDATE passa.
+
+  **Outras escritas sobem a versão sem exigi-la:** `PATCH /avaliar` (do
+  solicitante) e qualquer escrita da TI. Um formulário da Qualidade aberto
+  enquanto o solicitante avalia recebe 409 ao salvar — é o comportamento
+  certo, e o FE-4 precisa tratá-lo recarregando. Comentário não toca na linha
+  do chamado e não sobe a versão. `DELETE` apaga a linha.
+
+  Sem migration nova: a coluna e o trigger são os da API-4a, sem alteração.
+  Testes: `tests/test_versao_service.py` (função, handler, schemas),
+  `tests/test_precondicao_de_versao.py` (PUT e atendimento),
+  `tests/test_precondicao_de_versao_marcas.py` (marcas) e
+  `tests/test_precondicao_de_versao_postgres.py` (PostgreSQL: contagem,
+  recusa sem UPDATE, falha de chave estrangeira no commit desfazendo chamado e
+  histórico, um caso pontual de concorrência por rota, o PUT da TI sem lock e
+  a linha destravada depois de 428/409 no PUT). Os testes antigos da Qualidade passam a
+  escrever com a versão lida (`tests/versao_do_cliente.py`).
+
 ### Adicionado
 - **Setor de destino do chamado — primeira etapa.** Coluna nova
   `chamados.setor_destino` (`TI` | `QUALIDADE`, NOT NULL, padrão `TI`, CHECK
@@ -252,11 +332,9 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   `trigger_chamados_versao` (`BEFORE INSERT OR UPDATE`, função
   `chamados_versao()`), e exposta em toda resposta de chamado.
 
-  **Esta etapa não protege nada ainda.** Nenhuma rota confere a versão: o
-  `PUT` e o atendimento aceitam os mesmos corpos de antes, e a sobrescrita
-  descrita no M-1 (ação rápida da equipe desfazendo o status gravado pelo
-  atendente) continua possível. A conferência — `versao_esperada`, 409 com
-  `codigo` e `versao_atual`, 428 na Qualidade sem versão — é a API-4b.
+  **Sozinha, esta etapa não protege nada.** A conferência — `versao_esperada`,
+  409 com `codigo` e `versao_atual`, 428 na Qualidade sem versão — veio na
+  API-4b (ver "Alterado — mudança de contrato").
 
   **O que conta como mudança:** a versão sobe exatamente 1 a cada `UPDATE`
   que muda alguma coluna persistida — status, responsável, prioridade,
@@ -728,11 +806,34 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   disso, um atendente com perfil Usuario receberia chamados sem tela para
   atendê-los. Valor inválido não derruba a API: desliga a Qualidade e avisa no log.
 
-- **Antes de ligar a Qualidade: ensaiar a concorrência do atendimento em
-  PostgreSQL.** Duas sessões: uma faz o `SELECT … FOR UPDATE` do atendimento e
-  segura a transação; a outra reatribui o chamado pelo `PUT` e deve esperar.
-  Na ordem inversa, o atendimento deve esperar a reatribuição e responder 403.
-  A suíte não prova isso — roda em SQLite, que ignora o lock.
+- **API-4b (versão obrigatória na Qualidade): sem migration, mas só com o
+  FE-4.** A imagem não exige nada do banco além da migration da API-4a. Com a
+  Qualidade desligada (`SETOR_QUALIDADE_ID` vazio, como hoje), ela é
+  inofensiva para a TI: nenhuma rota da TI mudou para quem não manda a
+  versão. O que ela quebra é o cliente da Qualidade que não manda a versão —
+  o frontend atual (FE-3) recebe 428 em toda escrita da Qualidade. Ordem:
+
+  1. migration da API-4a
+  2. imagem da API-4b
+  3. frontend que manda `versao_esperada` e trata 428/409 (FE-4)
+  4. só então `SETOR_QUALIDADE_ID`
+
+  **Réplicas mistas:** API-4a (ou 3) e API-4b no ar ao mesmo tempo não se
+  protegem entre si — a antiga grava sem conferir, e o trigger conta a escrita
+  dela, então a 4b passa a recusar quem leu antes. Não há corrupção, mas a
+  proteção só vale com todas as réplicas na 4b. Subir uma imagem só.
+
+  **Rollback da imagem para API-4a/API-3** é seguro para o banco (nada mudou
+  nele). Mas, com o FE-4 no ar, o atendimento da 4a/3 recusa `versao_esperada`
+  como campo a mais (**422**): voltar a API exige voltar o frontend junto, ou
+  o atendimento da Qualidade para. PUT e marcas da 4a/3 ignoram o campo.
+
+- **Antes de ligar a Qualidade: concorrência em PostgreSQL.** A API-4b já
+  prova em PostgreSQL local, um caso por rota, que a escrita da Qualidade
+  espera o lock de outra transação e recusa com a versão gravada por ela, e
+  que o PUT da TI não pede o lock. A matriz completa de duas sessões (reatribuição ×
+  atendimento nas duas ordens, marcas × PUT, avaliar × atendimento) é a
+  API-4c, e precisa rodar no PostgreSQL 15 de homologação.
 
 - **Pendência n8n, antes de ligar a Qualidade:** conferir se algum fluxo do
   n8n lê a tabela `chamados` direto do banco, em vez de só receber o webhook.
