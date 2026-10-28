@@ -93,3 +93,16 @@ def executar_script(url: str, sql: str) -> list:
 
 def ler(relativo: str) -> str:
     return (RAIZ / relativo).read_text(encoding="utf-8")
+
+
+@contextmanager
+def modelo_da_api(prefixo: str):
+    """
+    Banco-modelo criado só pelo `schema_chamados.sql`, para copiar por
+    `banco_descartavel(modelo=...)`. Os cadastros semeados pelo schema saem:
+    os fixtures da suíte (`dados`, `qualidade`) gravam os seus, com ids fixos.
+    """
+    with banco_descartavel(prefixo) as url:
+        executar_script(url, ler("schema_chamados.sql"))
+        executar_script(url, "TRUNCATE roles, setores, categorias RESTART IDENTITY CASCADE")
+        yield url
