@@ -192,6 +192,58 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   a linha destravada depois de 428/409 no PUT). Os testes antigos da Qualidade passam a
   escrever com a versão lida (`tests/versao_do_cliente.py`).
 
+- **Concorrência da API-4 validada em PostgreSQL real (API-4c).** Só testes:
+  nenhuma rota, regra de SLA, permissão ou migration mudou. Duas requisições
+  correm ao mesmo tempo, cada uma com a sua sessão e conexão; a ordem entre
+  elas é imposta por uma pausa logo depois da conferência da versão, com a
+  linha já travada, e a espera da segunda é a que o próprio PostgreSQL mostra
+  em `pg_blocking_pids`. Nada sincroniza por sleep.
+
+  Matriz executada em PostgreSQL 15.19, local e descartável
+  (`tests/test_concorrencia_versao_postgres.py`, 63 testes; suíte completa no
+  mesmo banco: 1043 aprovados, nenhum pulado):
+
+  | Caso | O que se prova |
+  |---|---|
+  | T1 | dois PUTs com a mesma versão: um grava, o outro recebe 409 com a versão nova — com a ordem imposta e também largando juntos de uma barreira |
+  | T2 | PUT com a versão de antes da resolução: 409, status e solução preservados |
+  | T3 | atendimento com a versão de antes de um PUT: 409, sem webhook |
+  | T4 | duas reatribuições: só a primeira vale |
+  | T5 | PUT espera o lock do atendimento e recusa com a versão dele |
+  | T6 | resolução concorrente inteira (status, solução, data, histórico); SLA da resposta, do GET e do cálculo direto iguais; `status_anterior` do histórico é o lido sob o lock |
+  | T7 | cancelar/arquivar × atendimento nas duas ordens, desarquivar × PUT |
+  | T8 | falha depois do flush: chamado e histórico desfeitos juntos, lock solto (PUT, arquivar, atendimento) |
+  | T9 | PUT de vários campos com versão velha: nenhum campo gravado; a versão vem antes da validação do responsável |
+  | T10 | +1 por escrita efetiva em cada rota; nada sem mudança de dado |
+  | T11 | TI sem versão, sem `FOR UPDATE` e com webhook; um lock externo bloqueia a Qualidade e não a TI |
+  | T12 | 428 nas cinco rotas, sem gravar |
+  | T13 | 422 para versão nula, booleana, texto, zero, negativa ou fracionária; versão de outro chamado é 409 |
+  | T14 | UPDATE por SQL direto sobe a versão e espera o lock da API; as duas mudanças ficam |
+
+  E também: reatribuição × atendimento nas duas ordens (o antigo responsável
+  recebe 403, sem a versão), marcas × PUT, avaliação × atendimento, transações
+  que não atualizam nada (versão parada) e a versão atual fora de toda
+  resposta 401/403, mesmo para quem esperou o lock.
+
+  Cada lock (PUT, atendimento, marcas), o commit do histórico junto do
+  chamado e a ordem "autorização antes da versão" do atendimento foram
+  retirados, um por vez, numa cópia descartável do código: a matriz falha em
+  todos os casos.
+
+  Os testes de concorrência da API-4b deixam de depender do relógio: a TI é
+  provada pela ausência de `FOR UPDATE` no SQL emitido, e a espera da
+  Qualidade por `pg_blocking_pids`, e não mais pelo `lock_timeout` estourar.
+
+  **Comportamento registrado, não alterado:** a avaliação não trava nem
+  confere versão. Concorrente com uma reabertura, as duas gravam — sem perda
+  de escrita, mas a nota fica num chamado já reaberto. Decidir se isso é
+  aceitável fica para uma etapa própria.
+
+  **O que isto não prova:** o M-1 e o B-1 continuam **não resolvidos** —
+  dependem do FE-4 mandar a versão lida e tratar 428/409. A matriz rodou num
+  PostgreSQL local, não no de homologação, e o `TestClient` não é o servidor
+  de produção (uvicorn com vários workers).
+
 ### Adicionado
 - **Setor de destino do chamado — primeira etapa.** Coluna nova
   `chamados.setor_destino` (`TI` | `QUALIDADE`, NOT NULL, padrão `TI`, CHECK
@@ -831,9 +883,11 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 - **Antes de ligar a Qualidade: concorrência em PostgreSQL.** A API-4b já
   prova em PostgreSQL local, um caso por rota, que a escrita da Qualidade
   espera o lock de outra transação e recusa com a versão gravada por ela, e
-  que o PUT da TI não pede o lock. A matriz completa de duas sessões (reatribuição ×
-  atendimento nas duas ordens, marcas × PUT, avaliar × atendimento) é a
-  API-4c, e precisa rodar no PostgreSQL 15 de homologação.
+  que o PUT da TI não pede o lock. A matriz completa de duas sessões (API-4c,
+  T1–T14 mais reatribuição × atendimento, marcas × PUT e avaliar ×
+  atendimento) passou num PostgreSQL 15.19 local e descartável. Falta rodá-la
+  no PostgreSQL de homologação, com a versão de lá, antes de ligar a
+  Qualidade.
 
 - **Pendência n8n, antes de ligar a Qualidade:** conferir se algum fluxo do
   n8n lê a tabela `chamados` direto do banco, em vez de só receber o webhook.
