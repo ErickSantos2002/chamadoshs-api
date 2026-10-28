@@ -26,6 +26,7 @@ from app.schemas.chamado import (
     ChamadoAvaliacao,
     ChamadoCreate,
     ChamadoCreateQualidade,
+    ChamadoMarca,
     ChamadoResponse,
     ChamadoUpdate,
     SetorDestinoEnum,
@@ -742,9 +743,58 @@ def atender_chamado(
     return _anexar_sla([chamado], db)[0]
 
 
+# Corpo opcional das três marcas: sem ele, a requisição de antes continua
+# valendo (a TI e o frontend atual não mandam corpo nenhum).
+CORPO_DE_MARCA = Body(None)
+
+
+def _travar_e_conferir_marca(db: Session, chamado: Chamado, corpo: Optional[ChamadoMarca]) -> bool:
+    """
+    Pré-condição das marcas (API-4b). Devolve se o chamado é da Qualidade.
+
+    Qualidade: trava e relê a linha, e exige a versão (428/409). TI: sem
+    trava, versão opcional e conferida se vier — como no PUT, sem o lock isso
+    é aviso de dado velho, não controle de concorrência. Chamar depois da
+    autorização e antes das recusas de estado ("já está cancelado"), que
+    passam a ler a linha travada.
+    """
+    eh_qualidade = chamado.setor_destino == SetorDestinoEnum.QUALIDADE.value
+    if eh_qualidade:
+        db.refresh(chamado, with_for_update=True)
+    conferir_versao(
+        chamado,
+        corpo.versao_esperada if corpo is not None else None,
+        obrigatoria=eh_qualidade,
+    )
+    return eh_qualidade
+
+
+def _gravar_marca(db: Session, chamado: Chamado, eh_qualidade: bool, usuario_id: int, acao: str, descricao: str):
+    """
+    Grava a marca já posta no chamado, e o histórico dela.
+
+    Qualidade: num commit só, que solta o lock; falha desfaz os dois. TI: o
+    de antes — commit do chamado, depois o do histórico.
+    """
+    if eh_qualidade:
+        try:
+            adicionar_historico(db=db, chamado_id=chamado.id, usuario_id=usuario_id, acao=acao, descricao=descricao)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        db.refresh(chamado)
+        return
+
+    db.commit()
+    db.refresh(chamado)
+    registrar_historico(db=db, chamado_id=chamado.id, usuario_id=usuario_id, acao=acao, descricao=descricao)
+
+
 @router.patch("/{chamado_id}/cancelar", response_model=ChamadoResponse)
 def cancelar_chamado(
     chamado_id: int,
+    corpo: Optional[ChamadoMarca] = CORPO_DE_MARCA,
     usuario_id: Optional[int] = USUARIO_ID_DEPRECIADO,
     current_user: Usuario = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -753,7 +803,8 @@ def cancelar_chamado(
     Cancela um chamado (soft delete - apenas marca como cancelado).
 
     O solicitante pode cancelar o próprio chamado; administrador e técnico
-    cancelam qualquer um.
+    cancelam qualquer um. Em chamado da Qualidade, exige `versao_esperada`
+    (ver `_travar_e_conferir_marca`).
     """
     _avisar_usuario_id_depreciado("cancelar_chamado", usuario_id, current_user)
 
@@ -761,26 +812,23 @@ def cancelar_chamado(
     if not chamado:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
 
+    # Pela leitura sem trava: o solicitante não muda depois da abertura.
     if not is_staff(current_user) and chamado.solicitante_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Só é possível cancelar chamados abertos por você",
         )
 
+    eh_qualidade = _travar_e_conferir_marca(db, chamado, corpo)
+
     if chamado.cancelado:
         raise HTTPException(status_code=400, detail="Chamado já está cancelado")
 
     chamado.cancelado = True
-    db.commit()
-    db.refresh(chamado)
-
-    # Registrar no histórico
-    registrar_historico(
-        db=db,
-        chamado_id=chamado.id,
-        usuario_id=current_user.id,
+    _gravar_marca(
+        db, chamado, eh_qualidade, current_user.id,
         acao="Cancelamento de chamado",
-        descricao=f"Chamado #{chamado.protocolo} foi cancelado"
+        descricao=f"Chamado #{chamado.protocolo} foi cancelado",
     )
 
     return _anexar_sla([chamado], db)[0]
@@ -789,13 +837,15 @@ def cancelar_chamado(
 @router.patch("/{chamado_id}/arquivar", response_model=ChamadoResponse)
 def arquivar_chamado(
     chamado_id: int,
+    corpo: Optional[ChamadoMarca] = CORPO_DE_MARCA,
     usuario_id: Optional[int] = USUARIO_ID_DEPRECIADO,
     current_user: Usuario = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
     """
     Arquiva um chamado (remove da visualização padrão mas mantém no banco).
-    Restrito a administrador ou técnico.
+    Restrito a administrador ou técnico. Em chamado da Qualidade, exige
+    `versao_esperada` (ver `_travar_e_conferir_marca`).
     """
     _avisar_usuario_id_depreciado("arquivar_chamado", usuario_id, current_user)
 
@@ -803,20 +853,16 @@ def arquivar_chamado(
     if not chamado:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
 
+    eh_qualidade = _travar_e_conferir_marca(db, chamado, corpo)
+
     if chamado.arquivado:
         raise HTTPException(status_code=400, detail="Chamado já está arquivado")
 
     chamado.arquivado = True
-    db.commit()
-    db.refresh(chamado)
-
-    # Registrar no histórico
-    registrar_historico(
-        db=db,
-        chamado_id=chamado.id,
-        usuario_id=current_user.id,
+    _gravar_marca(
+        db, chamado, eh_qualidade, current_user.id,
         acao="Arquivamento de chamado",
-        descricao=f"Chamado #{chamado.protocolo} foi arquivado"
+        descricao=f"Chamado #{chamado.protocolo} foi arquivado",
     )
 
     return _anexar_sla([chamado], db)[0]
@@ -825,13 +871,15 @@ def arquivar_chamado(
 @router.patch("/{chamado_id}/desarquivar", response_model=ChamadoResponse)
 def desarquivar_chamado(
     chamado_id: int,
+    corpo: Optional[ChamadoMarca] = CORPO_DE_MARCA,
     usuario_id: Optional[int] = USUARIO_ID_DEPRECIADO,
     current_user: Usuario = Depends(require_staff),
     db: Session = Depends(get_db),
 ):
     """
     Desarquiva um chamado (volta a exibir na visualização padrão).
-    Restrito a administrador ou técnico.
+    Restrito a administrador ou técnico. Em chamado da Qualidade, exige
+    `versao_esperada` (ver `_travar_e_conferir_marca`).
     """
     _avisar_usuario_id_depreciado("desarquivar_chamado", usuario_id, current_user)
 
@@ -839,20 +887,16 @@ def desarquivar_chamado(
     if not chamado:
         raise HTTPException(status_code=404, detail="Chamado não encontrado")
 
+    eh_qualidade = _travar_e_conferir_marca(db, chamado, corpo)
+
     if not chamado.arquivado:
         raise HTTPException(status_code=400, detail="Chamado não está arquivado")
 
     chamado.arquivado = False
-    db.commit()
-    db.refresh(chamado)
-
-    # Registrar no histórico
-    registrar_historico(
-        db=db,
-        chamado_id=chamado.id,
-        usuario_id=current_user.id,
+    _gravar_marca(
+        db, chamado, eh_qualidade, current_user.id,
         acao="Desarquivamento de chamado",
-        descricao=f"Chamado #{chamado.protocolo} foi desarquivado"
+        descricao=f"Chamado #{chamado.protocolo} foi desarquivado",
     )
 
     return _anexar_sla([chamado], db)[0]

@@ -8,7 +8,7 @@ O que o SQLite não prova e aqui se prova:
   UPDATE nenhum — `updated_at`, que o trigger reescreve em todo UPDATE, fica
   igual;
 - falha de verdade no commit (chave estrangeira) desfaz chamado e histórico
-  juntos, no PUT da Qualidade;
+  juntos, no PUT e nas marcas da Qualidade;
 - a escrita da Qualidade espera o lock de outra transação e, quando ele sai,
   confere a versão GRAVADA por ela — e recusa, em vez de sobrescrever;
 - a TI não pede o lock;
@@ -138,6 +138,9 @@ def _atender(cliente, corpo, headers):
     return cliente.patch(f"/api/v1/chamados/{QUALIDADE}/atendimento", json=corpo, headers=headers)
 
 
+def _marca(cliente, rota, corpo, headers, chamado_id=QUALIDADE):
+    return cliente.patch(f"/api/v1/chamados/{chamado_id}/{rota}", json=corpo, headers=headers)
+
 
 def _desatualizada(versao_atual):
     return {"detail": VERSAO_DESATUALIZADA, "codigo": "versao_desatualizada", "versao_atual": versao_atual}
@@ -227,6 +230,49 @@ class TestAtendimento:
         assert _estado(sessao, QUALIDADE) == antes
 
 
+class TestMarcasDaQualidade:
+    @pytest.mark.parametrize(
+        "rota,depois",
+        [("cancelar", (True, False)), ("arquivar", (False, True))],
+    )
+    def test_versao_certa_grava_sobe_1_com_historico(
+        self, cliente, chamado_qualidade, sessao, autenticar, rota, depois
+    ):
+        resposta = _marca(cliente, rota, {"versao_esperada": 1}, _admin(autenticar, chamado_qualidade))
+        assert resposta.status_code == 200, resposta.text
+        assert resposta.json()["versao"] == 2
+        estado = _estado(sessao, QUALIDADE)
+        assert (estado["cancelado"], estado["arquivado"], estado["versao"]) == (*depois, 2)
+        assert len(estado["historicos"]) == 1
+
+    def test_arquivar_e_desarquivar_encadeados(self, cliente, chamado_qualidade, sessao, autenticar):
+        admin = _admin(autenticar, chamado_qualidade)
+        arquivado = _marca(cliente, "arquivar", {"versao_esperada": 1}, admin)
+        desarquivado = _marca(cliente, "desarquivar", {"versao_esperada": arquivado.json()["versao"]}, admin)
+        assert desarquivado.status_code == 200
+        assert desarquivado.json()["versao"] == 3
+        assert len(_estado(sessao, QUALIDADE)["historicos"]) == 2
+
+    @pytest.mark.parametrize("rota", ["cancelar", "arquivar"])
+    def test_versao_antiga_e_409_e_nao_executa_update(self, cliente, chamado_qualidade, sessao, autenticar, rota):
+        admin = _admin(autenticar, chamado_qualidade)
+        assert _put(cliente, QUALIDADE, {"prioridade": "Alta", "versao_esperada": 1}, admin).status_code == 200
+        antes = _estado(sessao, QUALIDADE)
+
+        resposta = _marca(cliente, rota, {"versao_esperada": 1}, admin)
+
+        assert resposta.status_code == 409
+        assert resposta.json() == _desatualizada(2)
+        assert _estado(sessao, QUALIDADE) == antes
+
+    @pytest.mark.parametrize("rota", ["cancelar", "arquivar"])
+    def test_sem_versao_e_428(self, cliente, chamado_qualidade, sessao, autenticar, rota):
+        antes = _estado(sessao, QUALIDADE)
+        resposta = cliente.patch(f"/api/v1/chamados/{QUALIDADE}/{rota}", headers=_admin(autenticar, chamado_qualidade))
+        assert resposta.status_code == 428
+        assert _estado(sessao, QUALIDADE) == antes
+
+
 class TestAtomicidade:
     """Falha de verdade, no commit, desfaz chamado e histórico juntos."""
 
@@ -249,6 +295,15 @@ class TestAtomicidade:
                 cliente, QUALIDADE, {"status": "Em Andamento", "prioridade": "Alta", "versao_esperada": 1},
                 _admin(autenticar, chamado_qualidade),
             )
+        assert _estado(sessao, QUALIDADE) == antes
+
+    @pytest.mark.parametrize("rota", ["cancelar", "arquivar"])
+    def test_marca_falha_no_historico_desfaz_a_marca(
+        self, cliente, chamado_qualidade, sessao, autenticar, historico_com_autor_inexistente, rota
+    ):
+        antes = _estado(sessao, QUALIDADE)
+        with pytest.raises(IntegrityError):
+            _marca(cliente, rota, {"versao_esperada": 1}, _admin(autenticar, chamado_qualidade))
         assert _estado(sessao, QUALIDADE) == antes
 
     def test_put_falha_no_chamado_nao_grava_o_historico(
@@ -329,8 +384,10 @@ class TestConcorrenciaPontual:
         [
             lambda c, a, d: _put(c, QUALIDADE, {"status": "Em Andamento", "versao_esperada": 1}, _admin(a, d)),
             lambda c, a, d: _atender(c, {"status": "Em Andamento", "versao_esperada": 1}, _atendente(a, d)),
+            lambda c, a, d: _marca(c, "arquivar", {"versao_esperada": 1}, _admin(a, d)),
+            lambda c, a, d: _marca(c, "cancelar", {"versao_esperada": 1}, _admin(a, d)),
         ],
-        ids=["put", "atendimento"],
+        ids=["put", "atendimento", "arquivar", "cancelar"],
     )
     def test_espera_o_lock_e_recusa_com_a_versao_gravada_pela_outra(
         self, cliente, chamado_qualidade, sessao, autenticar, url_do_banco, outra_pessoa_grava, escrita
