@@ -24,6 +24,7 @@ direto, avaliação e segurança estão na segunda metade do arquivo.
 
 import threading
 
+import psycopg2
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
@@ -36,9 +37,10 @@ from app.models import Chamado
 from app.models.historico import HistoricoChamado
 from app.models.sla_config import SLAConfig
 from app.schemas.sla import SLAInfo
+from app.services.chamado_service import adicionar_historico
 from app.services.sla_service import calcular_sla
 from app.services.versao_service import VERSAO_DESATUALIZADA
-from concorrencia import LOCK_TIMEOUT_DOS_TESTES, TEMPO_MAXIMO, Pausa, em_paralelo, esperar_bloqueio
+from concorrencia import LOCK_TIMEOUT_DOS_TESTES, TEMPO_MAXIMO, Pausa, em_paralelo, esperar_bloqueio, sql_emitido
 from pg_descartavel import banco_descartavel, modelo_da_api
 
 pytestmark = pytest.mark.postgres
@@ -517,3 +519,449 @@ class TestMarcasEPut:
         estado = _estado(sessao)
         assert (estado["arquivado"], estado["status"]) == (False, "Em Andamento")
         assert estado["historicos"] == [("Alteração de status", "Aberto", "Em Andamento")]
+
+
+# --------------------------------------------------------------------------
+# T8–T14
+# --------------------------------------------------------------------------
+
+def _linha(sessao, chamado_id=QUALIDADE):
+    """A linha inteira, para provar que nada mudou."""
+    sessao.rollback()
+    return dict(sessao.execute(text("SELECT * FROM chamados WHERE id = :id"), {"id": chamado_id}).mappings().one())
+
+
+def _historicos(sessao, chamado_id=QUALIDADE):
+    return _estado(sessao, chamado_id)["historicos"]
+
+
+class FalhaDepoisDoFlush:
+    """
+    Substitui a função do endpoint que grava o histórico: põe o histórico na
+    transação, manda o INSERT ao banco (flush), para até o teste liberar, e
+    então lança. O UPDATE do chamado e o INSERT do histórico já estão no banco,
+    sem commit — é o pior momento para falhar.
+    """
+
+    def __init__(self):
+        self._parou = threading.Event()
+        self._seguir = threading.Event()
+        self.pid = None
+
+    def __call__(self, db, **campos):
+        adicionar_historico(db=db, **campos)
+        db.flush()
+        self.pid = db.execute(text("SELECT pg_backend_pid()")).scalar()
+        self._parou.set()
+        self._seguir.wait(TEMPO_MAXIMO)
+        raise RuntimeError("falha simulada depois do flush")
+
+    def esperar_parar(self):
+        assert self._parou.wait(TEMPO_MAXIMO), "a requisição não chegou à falha"
+
+    def liberar(self):
+        self._seguir.set()
+
+
+class TestT8RollbackDepoisDoFlush:
+    @pytest.mark.parametrize(
+        "rota,funcao",
+        [("put", "adicionar_historico"), ("arquivar", "adicionar_historico"), ("atendimento", "registrar_historico")],
+    )
+    def test_falha_no_meio_desfaz_chamado_e_historico_e_solta_o_lock(
+        self, cliente, base, sessao, autenticar, url_do_banco, monkeypatch, rota, funcao
+    ):
+        d, v0 = base, base["v0"]
+        falha = FalhaDepoisDoFlush()
+        monkeypatch.setattr(chamados_endpoint, funcao, falha)
+        antes = _linha(sessao)
+        requisicao = {
+            "put": lambda: _put(cliente, {"status": "Em Andamento", "versao_esperada": v0}, _admin(autenticar, d)),
+            "arquivar": lambda: _marca(cliente, "arquivar", {"versao_esperada": v0}, _admin(autenticar, d)),
+            "atendimento": lambda: _atender(cliente, {"status": "Em Andamento", "versao_esperada": v0}, _atendente(autenticar, d)),
+        }[rota]
+
+        esperar = em_paralelo(requisicao)
+        observador = psycopg2.connect(url_do_banco)
+        try:
+            falha.esperar_parar()
+            with observador.cursor() as cur:
+                # O INSERT do histórico foi ao banco (a sessão segura o lock da tabela)...
+                cur.execute(
+                    "SELECT count(*) FROM pg_locks l JOIN pg_class c ON c.oid = l.relation "
+                    "WHERE l.pid = %s AND c.relname = 'historico_chamados' AND l.mode = 'RowExclusiveLock'",
+                    (falha.pid,),
+                )
+                assert cur.fetchone()[0] == 1
+                # ...mas, sem commit, ninguém o vê, nem a versão nova.
+                cur.execute("SELECT versao FROM chamados WHERE id = %s", (QUALIDADE,))
+                assert cur.fetchone()[0] == v0
+                cur.execute("SELECT count(*) FROM historico_chamados WHERE chamado_id = %s", (QUALIDADE,))
+                assert cur.fetchone()[0] == 0
+                # E a linha está travada pela requisição.
+                with pytest.raises(psycopg2.errors.LockNotAvailable):
+                    cur.execute("SELECT 1 FROM chamados WHERE id = %s FOR UPDATE NOWAIT", (QUALIDADE,))
+            observador.rollback()
+
+            falha.liberar()
+            with pytest.raises(RuntimeError, match="falha simulada"):
+                esperar()
+
+            # Rollback dos dois, e o lock solto.
+            with observador.cursor() as cur:
+                cur.execute("SELECT 1 FROM chamados WHERE id = %s FOR UPDATE NOWAIT", (QUALIDADE,))
+            observador.rollback()
+        finally:
+            falha.liberar()
+            observador.close()
+        assert _linha(sessao) == antes
+        assert _historicos(sessao) == []
+
+
+class TestT9PutDeVariosCamposDesatualizado:
+    def test_nenhum_campo_e_gravado(self, cliente, base, sessao, autenticar):
+        d, v0 = base, base["v0"]
+        v1 = _gravar(sessao, observacoes="mudado por outra pessoa")
+        antes = _linha(sessao)
+        corpo = {
+            "titulo": "Laudo do lote 42 reemitido pela Qualidade",
+            "prioridade": "Crítica",
+            "urgencia": "Urgente",
+            "status": "Em Andamento",
+            "tecnico_responsavel_id": d["tecnico_da_qualidade_id"],
+            "solucao": SOLUCAO,
+            "observacoes": "edição em cima de dado velho",
+            "avaliacao": 3,
+            "versao_esperada": v0,
+        }
+
+        resposta = _put(cliente, corpo, _admin(autenticar, d))
+
+        assert resposta.status_code == 409 and resposta.json() == _desatualizada(v1)
+        assert _linha(sessao) == antes
+        assert _historicos(sessao) == []
+
+    def test_a_versao_vem_antes_da_validacao_do_responsavel(self, cliente, base, sessao, autenticar):
+        d, v0 = base, base["v0"]
+        v1 = _gravar(sessao, prioridade="Alta")
+
+        resposta = _put(cliente, {"tecnico_responsavel_id": d["inativo_id"], "versao_esperada": v0}, _admin(autenticar, d))
+
+        assert resposta.status_code == 409 and resposta.json() == _desatualizada(v1)
+
+
+class TestT10VersaoPorRota:
+    def test_cada_escrita_efetiva_sobe_um_e_a_resposta_diz_a_gravada(self, cliente, base, sessao, autenticar):
+        d, v = base, base["v0"]
+        admin, atendente = _admin(autenticar, d), _atendente(autenticar, d)
+        solicitante = autenticar(d["comum_id"], "usuario.teste", "Usuario")
+
+        def avaliar(nota):
+            return cliente.patch(f"/api/v1/chamados/{QUALIDADE}/avaliar", json={"avaliacao": nota}, headers=solicitante)
+
+        passos = [
+            ("PUT de prioridade", lambda v: _put(cliente, {"prioridade": "Alta", "versao_esperada": v}, admin), 1),
+            ("PUT sem mudança", lambda v: _put(cliente, {"prioridade": "Alta", "versao_esperada": v}, admin), 0),
+            ("atendimento", lambda v: _atender(cliente, {"status": "Em Andamento", "versao_esperada": v}, atendente), 1),
+            ("arquivar", lambda v: _marca(cliente, "arquivar", {"versao_esperada": v}, admin), 1),
+            ("desarquivar", lambda v: _marca(cliente, "desarquivar", {"versao_esperada": v}, admin), 1),
+            ("PUT de resolução", lambda v: _put(cliente, {"status": "Resolvido", "solucao": SOLUCAO, "versao_esperada": v}, admin), 1),
+            ("avaliação", lambda v: avaliar(5), 1),
+            ("mesma avaliação", lambda v: avaliar(5), 0),
+            ("cancelar", lambda v: _marca(cliente, "cancelar", {"versao_esperada": v}, admin), 1),
+        ]
+        for nome, passo, incremento in passos:
+            corpo = _ok(passo(v))
+            gravada = _estado(sessao)["versao"]
+            assert (corpo["versao"], gravada) == (v + incremento, v + incremento), nome
+            v = gravada
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "UPDATE chamados SET status = status WHERE id = 101",
+            "UPDATE chamados SET updated_at = now(), data_atualizacao = now() WHERE id = 101",
+        ],
+    )
+    def test_update_sem_mudanca_de_dado_nao_sobe(self, base, sessao, sql):
+        sessao.execute(text(sql))
+        sessao.commit()
+        assert _estado(sessao)["versao"] == base["v0"]
+
+
+class TestT11TiSemControleDeVersao:
+    TI = 100
+
+    def test_ti_segue_sem_versao_sem_lock_e_com_o_webhook(self, cliente, base, sessao, autenticar, engine, webhook):
+        d = base
+        admin = _admin(autenticar, d)
+        with sql_emitido(engine) as comandos:
+            editado = _ok(_put(cliente, {"tecnico_responsavel_id": d["tecnico_id"], "status": "Em Andamento"}, admin, self.TI))
+            _ok(_marca(cliente, "arquivar", None, admin, self.TI))
+            _ok(_marca(cliente, "desarquivar", None, admin, self.TI))
+            _ok(_marca(cliente, "cancelar", {}, admin, self.TI))
+
+        assert comandos and not [c for c in comandos if "FOR UPDATE" in c.upper()]
+        assert editado["tecnico_responsavel_id"] == d["tecnico_id"]
+        assert _historicos(sessao, self.TI)[0] == ("Alteração de status", "Aberto", "Em Andamento")
+        assert [(w["tecnico_id"], w["acao"]) for w in webhook] == [(d["tecnico_id"], "atribuido")]
+
+    def test_a_qualidade_por_contraste_pede_o_lock(self, cliente, base, autenticar, engine):
+        with sql_emitido(engine) as comandos:
+            _ok(_put(cliente, {"prioridade": "Alta", "versao_esperada": base["v0"]}, _admin(autenticar, base)))
+        assert [c for c in comandos if "FOR UPDATE" in c.upper()]
+
+    def test_ti_com_versao_velha_ainda_e_409(self, cliente, base, sessao, autenticar):
+        v1 = _gravar(sessao, self.TI, prioridade="Alta")
+        resposta = _put(cliente, {"status": "Em Andamento", "versao_esperada": v1 - 1}, _admin(autenticar, base), self.TI)
+        assert resposta.status_code == 409 and resposta.json() == _desatualizada(v1)
+
+    def test_lock_externo_bloqueia_a_qualidade_e_nao_a_ti(self, cliente, base, autenticar, url_do_banco):
+        """
+        Outra transação segura FOR KEY SHARE nas duas linhas. O UPDATE simples
+        da TI não conflita com ele; o SELECT ... FOR UPDATE da Qualidade, sim.
+        """
+        admin = _admin(autenticar, base)
+        externa = psycopg2.connect(url_do_banco)
+        try:
+            with externa.cursor() as cur:
+                cur.execute("SELECT id FROM chamados WHERE id IN (100, 101) FOR KEY SHARE")
+                cur.execute("SELECT pg_backend_pid()")
+                pid_externo = cur.fetchone()[0]
+
+            # TI: termina com o lock externo ainda de pé.
+            _ok(em_paralelo(lambda: _put(cliente, {"prioridade": "Alta"}, admin, self.TI))())
+
+            # Qualidade: espera o lock externo — e o banco mostra quem bloqueia quem.
+            esperar = em_paralelo(lambda: _put(cliente, {"prioridade": "Alta", "versao_esperada": base["v0"]}, admin))
+            esperar_bloqueio(url_do_banco, pid_externo)
+            externa.rollback()
+            assert _ok(esperar())["versao"] == base["v0"] + 1
+        finally:
+            externa.close()
+
+
+class TestT12VersaoAusente:
+    @pytest.mark.parametrize("rota", ["put", "atendimento", "cancelar", "arquivar", "desarquivar", "marca com corpo vazio"])
+    def test_428_e_nada_gravado(self, cliente, base, sessao, autenticar, rota):
+        d = base
+        admin = _admin(autenticar, d)
+        antes = _linha(sessao)
+        resposta = {
+            "put": lambda: _put(cliente, {"prioridade": "Alta"}, admin),
+            "atendimento": lambda: _atender(cliente, {"status": "Em Andamento"}, _atendente(autenticar, d)),
+            "cancelar": lambda: _marca(cliente, "cancelar", None, admin),
+            "arquivar": lambda: _marca(cliente, "arquivar", None, admin),
+            "desarquivar": lambda: _marca(cliente, "desarquivar", None, admin),
+            "marca com corpo vazio": lambda: _marca(cliente, "arquivar", {}, admin),
+        }[rota]()
+
+        assert resposta.status_code == 428 and resposta.json() == {"detail": "Informe a versão do chamado"}
+        assert _linha(sessao) == antes
+        assert _historicos(sessao) == []
+
+
+class TestT13VersaoInvalida:
+    @pytest.mark.parametrize("valor", [None, True, "1", 0, -1, 1.5])
+    @pytest.mark.parametrize("rota", ["put", "arquivar"])
+    def test_422_e_nada_gravado(self, cliente, base, sessao, autenticar, rota, valor):
+        admin = _admin(autenticar, base)
+        antes = _linha(sessao)
+        if rota == "put":
+            resposta = _put(cliente, {"prioridade": "Alta", "versao_esperada": valor}, admin)
+        else:
+            resposta = _marca(cliente, "arquivar", {"versao_esperada": valor}, admin)
+
+        assert resposta.status_code == 422
+        assert "versao_atual" not in resposta.json()
+        assert _linha(sessao) == antes
+
+    def test_versao_de_outro_chamado_e_409_com_a_versao_deste(self, cliente, base, sessao, autenticar):
+        sessao.execute(text(
+            "INSERT INTO chamados (id, protocolo, solicitante_id, titulo, descricao, status, prioridade, "
+            "setor_destino, tecnico_responsavel_id) SELECT 102, 'CH-TESTE-102', solicitante_id, titulo, "
+            "descricao, status, prioridade, setor_destino, tecnico_responsavel_id FROM chamados WHERE id = 101"
+        ))
+        sessao.commit()
+        for prioridade in ("Alta", "Crítica", "Baixa"):
+            versao_do_outro = _gravar(sessao, 102, prioridade=prioridade)
+        assert versao_do_outro != base["v0"]
+
+        resposta = _put(cliente, {"status": "Em Andamento", "versao_esperada": versao_do_outro}, _admin(autenticar, base))
+
+        assert resposta.status_code == 409 and resposta.json() == _desatualizada(base["v0"])
+
+
+class TestT14SqlDireto:
+    def test_update_por_fora_sobe_a_versao_e_o_cliente_antigo_recebe_409(self, cliente, base, sessao, autenticar):
+        v1 = _gravar(sessao, prioridade="Alta")
+        assert v1 == base["v0"] + 1
+        resposta = _put(cliente, {"status": "Em Andamento", "versao_esperada": base["v0"]}, _admin(autenticar, base))
+        assert resposta.status_code == 409 and resposta.json() == _desatualizada(v1)
+
+    def test_update_por_fora_espera_a_api_e_as_duas_mudancas_ficam(
+        self, cliente, base, sessao, autenticar, url_do_banco, pausa
+    ):
+        v0 = base["v0"]
+
+        def por_fora():
+            conexao = psycopg2.connect(url_do_banco)
+            try:
+                with conexao.cursor() as cur:
+                    cur.execute("UPDATE chamados SET observacoes = 'ajuste por SQL' WHERE id = %s", (QUALIDADE,))
+                conexao.commit()
+            finally:
+                conexao.close()
+
+        a, _ = _cena(
+            url_do_banco, pausa,
+            lambda: _put(cliente, {"status": "Em Andamento", "versao_esperada": v0}, _admin(autenticar, base)),
+            por_fora,
+        )
+
+        assert _ok(a)["versao"] == v0 + 1
+        linha = _linha(sessao)
+        assert (linha["status"], linha["observacoes"], linha["versao"]) == ("Em Andamento", "ajuste por SQL", v0 + 2)
+
+
+# --------------------------------------------------------------------------
+# Avaliação × atendimento
+# --------------------------------------------------------------------------
+
+class TestAvaliacaoEAtendimento:
+    @pytest.fixture
+    def resolvido(self, base, sessao, autenticar):
+        v = _gravar(sessao, status="Resolvido", solucao=SOLUCAO)
+        return {**base, "v": v, "solicitante": autenticar(base["comum_id"], "usuario.teste", "Usuario")}
+
+    @staticmethod
+    def _avaliar(cliente, headers, nota=4):
+        return cliente.patch(f"/api/v1/chamados/{QUALIDADE}/avaliar", json={"avaliacao": nota}, headers=headers)
+
+    def test_avaliacao_primeiro_e_reabertura_antiga_e_409(self, cliente, resolvido, sessao, autenticar):
+        d, v = resolvido, resolvido["v"]
+        assert _ok(self._avaliar(cliente, d["solicitante"]))["versao"] == v + 1
+
+        resposta = _atender(cliente, {"status": "Em Andamento", "versao_esperada": v}, _atendente(autenticar, d))
+
+        assert resposta.status_code == 409 and resposta.json() == _desatualizada(v + 1)
+        estado = _estado(sessao)
+        assert (estado["status"], estado["avaliacao"]) == ("Resolvido", 4)
+
+    def test_concorrentes_as_duas_gravam_sem_perder_nada(self, cliente, resolvido, sessao, autenticar, url_do_banco, pausa):
+        """
+        A avaliação não trava nem confere versão (fora do escopo da API-4b): lê
+        "Resolvido" sem lock, e o UPDATE dela espera o da reabertura. As duas
+        gravam — status de uma, nota da outra. É o comportamento de hoje,
+        registrado: a nota fica num chamado já reaberto.
+        """
+        d, v = resolvido, resolvido["v"]
+        a, b = _cena(
+            url_do_banco, pausa,
+            lambda: _atender(cliente, {"status": "Em Andamento", "versao_esperada": v}, _atendente(autenticar, d)),
+            lambda: self._avaliar(cliente, d["solicitante"]),
+        )
+
+        _ok(a)
+        _ok(b)
+        estado = _estado(sessao)
+        assert (estado["status"], estado["avaliacao"], estado["versao"]) == ("Em Andamento", 4, v + 2)
+        assert [h[0] for h in estado["historicos"]] == ["Alteração de status", "Avaliação do atendimento"]
+
+    def test_atendente_nao_avalia(self, cliente, resolvido, sessao, autenticar):
+        resposta = self._avaliar(cliente, _atendente(autenticar, resolvido))
+        assert resposta.status_code == 403
+        assert _estado(sessao)["versao"] == resolvido["v"]
+
+
+# --------------------------------------------------------------------------
+# Segurança: a versão atual só vai para quem pode escrever
+# --------------------------------------------------------------------------
+
+class TestSegurancaDaVersao:
+    @pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer token-invalido"}])
+    def test_401_nao_diz_a_versao(self, cliente, base, sessao, headers):
+        v1 = _gravar(sessao, prioridade="Alta")
+        for resposta in (
+            _put(cliente, {"status": "Em Andamento", "versao_esperada": v1 - 1}, headers),
+            _atender(cliente, {"status": "Em Andamento", "versao_esperada": v1 - 1}, headers),
+            _marca(cliente, "arquivar", {"versao_esperada": v1 - 1}, headers),
+        ):
+            assert resposta.status_code == 401
+            assert "versao_atual" not in resposta.json()
+
+    def test_403_por_perfil_ou_autoria_nao_diz_a_versao(self, cliente, base, sessao, autenticar):
+        v1 = _gravar(sessao, prioridade="Alta")
+        comum = autenticar(base["comum_id"], "usuario.teste", "Usuario")
+        atendente = _atendente(autenticar, base)
+        for resposta in (
+            _marca(cliente, "arquivar", {"versao_esperada": v1 - 1}, comum),
+            _put(cliente, {"status": "Em Andamento", "versao_esperada": v1 - 1}, atendente),
+            _marca(cliente, "cancelar", {"versao_esperada": v1 - 1}, atendente),
+        ):
+            assert resposta.status_code == 403
+            assert "versao_atual" not in resposta.json()
+        assert _linha(sessao)["versao"] == v1
+
+    def test_quem_nao_atende_espera_o_lock_e_recebe_403_sem_a_versao(
+        self, cliente, base, sessao, autenticar, url_do_banco, pausa
+    ):
+        """O atendimento trava antes de autorizar; mesmo depois de esperar, quem não é o responsável não vê a versão."""
+        d, v0 = base, base["v0"]
+        a, b = _cena(
+            url_do_banco, pausa,
+            lambda: _put(cliente, {"prioridade": "Alta", "versao_esperada": v0}, _admin(autenticar, d)),
+            lambda: _atender(
+                cliente, {"status": "Em Andamento", "versao_esperada": v0},
+                autenticar(d["tecnico_da_qualidade_id"], "bruno.qualidade", "Tecnico"),
+            ),
+        )
+
+        _ok(a)
+        assert b.status_code == 403 and "versao_atual" not in b.json()
+        assert _estado(sessao)["status"] == "Aberto"
+
+    def test_o_409_tem_so_detail_codigo_e_versao_atual(self, cliente, base, sessao, autenticar):
+        v1 = _gravar(sessao, prioridade="Alta")
+        resposta = _put(cliente, {"status": "Em Andamento", "versao_esperada": v1 - 1}, _admin(autenticar, base))
+        assert resposta.status_code == 409
+        assert set(resposta.json()) == {"detail", "codigo", "versao_atual"}
+
+
+# --------------------------------------------------------------------------
+# Transações que não atualizam nada
+# --------------------------------------------------------------------------
+
+class TestSemAtualizacao:
+    def test_put_com_os_mesmos_valores_mantem_versao_e_historico(self, cliente, base, sessao, autenticar):
+        v0 = base["v0"]
+        corpo = _ok(_put(cliente, {"status": "Aberto", "prioridade": "Média", "versao_esperada": v0}, _admin(autenticar, base)))
+        assert corpo["versao"] == v0
+        assert (_estado(sessao)["versao"], _historicos(sessao)) == (v0, [])
+
+    @pytest.mark.parametrize(
+        "marca,campo,detalhe",
+        [("arquivar", "arquivado", "Chamado já está arquivado"), ("cancelar", "cancelado", "Chamado já está cancelado")],
+    )
+    def test_marca_repetida_e_400_sem_mudar_a_versao(self, cliente, base, sessao, autenticar, marca, campo, detalhe):
+        v = _gravar(sessao, **{campo: True})
+        antes = _linha(sessao)
+        resposta = _marca(cliente, marca, {"versao_esperada": v}, _admin(autenticar, base))
+        assert resposta.status_code == 400 and resposta.json() == {"detail": detalhe}
+        assert _linha(sessao) == antes
+
+    def test_desarquivar_o_que_nao_esta_arquivado_e_400(self, cliente, base, sessao, autenticar):
+        antes = _linha(sessao)
+        resposta = _marca(cliente, "desarquivar", {"versao_esperada": base["v0"]}, _admin(autenticar, base))
+        assert resposta.status_code == 400
+        assert _linha(sessao) == antes
+
+    def test_transicao_invalida_e_409_de_estado_sem_codigo_de_versao(self, cliente, base, sessao, autenticar):
+        antes = _linha(sessao)
+        resposta = _atender(
+            cliente, {"status": "Resolvido", "solucao": SOLUCAO, "versao_esperada": base["v0"]}, _atendente(autenticar, base)
+        )
+        assert resposta.status_code == 409
+        assert resposta.json() == {"detail": "Transição de Aberto para Resolvido não permitida"}
+        assert _linha(sessao) == antes
+        assert _historicos(sessao) == []
