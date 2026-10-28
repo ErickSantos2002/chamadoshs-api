@@ -122,6 +122,28 @@ Resposta esperada:
 }
 ```
 
+### 6.3. Rodar a suíte de testes
+
+```bash
+pytest
+```
+
+Roda em SQLite em memória; não precisa de banco nem de `.env`. Os testes
+marcados `postgres` (migrations e triggers, como o da versão do chamado) são
+**pulados** sem a variável abaixo — o SQLite não tem os triggers.
+
+Para rodá-los, um PostgreSQL **local e descartável** (os testes criam e apagam
+bancos nele, com `CREATE DATABASE … TEMPLATE` e `DROP DATABASE … WITH (FORCE)`;
+o usuário precisa poder fazer isso):
+
+```bash
+CHAMADOSHS_TESTE_PG_URL=postgresql://postgres@127.0.0.1:54329/postgres pytest -m postgres
+```
+
+A URL é do **servidor**, não de um banco da aplicação. Host que não seja
+`localhost`/`127.0.0.1`/`::1` faz os testes falharem de propósito: nunca apontar
+para o banco de produção.
+
 ## 7. Exemplos de Uso
 
 ### 7.1. Listar categorias

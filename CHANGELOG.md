@@ -246,6 +246,48 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   `tests/test_reatribuicao_qualidade.py`; fixture `chamado_qualidade` em
   `tests/conftest.py`. Sem migration e sem variável nova.
 
+- **Versão do chamado (API-4a): a infraestrutura do controle otimista.**
+  Coluna nova `chamados.versao` (`INTEGER NOT NULL DEFAULT 1`, CHECK
+  `chk_chamados_versao`, `>= 1`), mantida pelo trigger
+  `trigger_chamados_versao` (`BEFORE INSERT OR UPDATE`, função
+  `chamados_versao()`), e exposta em toda resposta de chamado.
+
+  **Esta etapa não protege nada ainda.** Nenhuma rota confere a versão: o
+  `PUT` e o atendimento aceitam os mesmos corpos de antes, e a sobrescrita
+  descrita no M-1 (ação rápida da equipe desfazendo o status gravado pelo
+  atendente) continua possível. A conferência — `versao_esperada`, 409 com
+  `codigo` e `versao_atual`, 428 na Qualidade sem versão — é a API-4b.
+
+  **O que conta como mudança:** a versão sobe exatamente 1 a cada `UPDATE`
+  que muda alguma coluna persistida — status, responsável, prioridade,
+  solução, cancelado, arquivado, avaliação, datas de resolução, qualquer uma —,
+  venha do SQLAlchemy, de SQL direto ou de uma imagem antiga da API. **Não
+  contam** `updated_at` (reescrito pelo `trigger_chamados_updated_at` em todo
+  `UPDATE`, até no vazio), `data_atualizacao` (reescrito pelo ORM) e a própria
+  `versao`. Um `UPDATE` que não muda nada além disso não sobe; um que muda
+  vários campos sobe uma vez. Comentário e histórico são outras tabelas e não
+  sobem a versão do chamado.
+
+  **A versão não vem do cliente nem do comando.** No `INSERT` é 1; no `UPDATE`
+  é derivada de `OLD.versao`. `UPDATE chamados SET versao = 999` não muda
+  nada. O ORM não incrementa (`server_onupdate=FetchedValue()` só faz o objeto
+  reler a coluna depois do flush), e mandar `versao` no corpo do `PUT` é
+  ignorado como qualquer campo desconhecido.
+
+  | Rota | Antes | Agora |
+  |---|---|---|
+  | Respostas de chamado (`GET`, `POST`, `PUT`, `PATCH`) | sem o campo | **`versao`**, a já gravada |
+  | Corpos de escrita | — | **sem mudança** |
+
+  Testes: 14 de contrato em SQLite (`tests/test_versao_na_resposta.py`, onde a
+  versão é sempre 1 — lá não há trigger) e 66 em **PostgreSQL real** e
+  descartável (`tests/test_versao_chamados_postgres.py`: migration, estados
+  parciais, reversão e trigger; `tests/test_versao_api_postgres.py`: contagem
+  pelas rotas e pelo ORM, e schema e migration instalando o mesmo trigger).
+  Os de PostgreSQL rodam com `CHAMADOSHS_TESTE_PG_URL` (ver `SETUP.md`) e são
+  pulados sem ela; foram executados em PostgreSQL 16.2 local, não no 15 do
+  Easypanel.
+
 - **`GET /api/v1/health`**, público e barato o bastante para ser chamado a cada
   60s, para a faixa de status do frontend e para monitoramento externo.
 
@@ -645,18 +687,38 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   alterar nada. Rodar como script inteiro (DBeaver: Alt+X). Termina com as
   consultas de verificação. Ainda não foi ensaiada em PostgreSQL real — fazer
   em homologação ou num banco restaurado do backup antes de produção.
+- **Migration `migrations/2026-10-28-add-versao-chamados.sql`** (API-4a):
+  **backup antes**, e aplicar **antes** de subir a imagem que traz a versão — o
+  model declara a coluna, e com o banco antigo todo `/api/v1/chamados` cai.
+  Aditiva: a API-3 (ou anterior) continua funcionando com a coluna e o trigger,
+  então o rollback da imagem é seguro, e o trigger segue contando as escritas
+  dela. Repetível: já aplicada, só avisa; qualquer estado parcial ou
+  divergente (coluna sem trigger, função com outro corpo, trigger `AFTER`, um
+  segundo trigger usando a mesma função) para com erro sem alterar nada.
+  Rodar como script inteiro (DBeaver: Alt+X); termina com as consultas de
+  verificação. Ensaiada só em PostgreSQL 16.2 local e descartável — repetir em
+  homologação (15) antes de produção.
 
-- **ORDEM DO DEPLOY: duas migrations pendentes.**
+  **Reversão** (só se imprescindível, e só depois de a imagem no ar voltar a
+  ser uma que não declara `versao`): os três `DROP` do cabeçalho do arquivo —
+  trigger, função, coluna. Perde só as versões. O caminho preferido é o
+  backup. Restore **só de dados** (`pg_restore --data-only`) com o trigger
+  instalado zera as versões para 1; usar `--disable-triggers` nesse caso. Um
+  restore completo preserva.
+
+- **ORDEM DO DEPLOY: três migrations pendentes.**
 
   1. `migrations/2026-08-12-add-eventos-de-setor.sql`
   2. `migrations/2026-10-26-add-setor-destino.sql` (backup antes)
-  3. subir a imagem
-  4. apontar o healthcheck do Easypanel para `/health`
+  3. `migrations/2026-10-28-add-versao-chamados.sql` (backup antes; só junto
+     com a imagem da API-4a ou posterior — antes dela é inofensiva)
+  4. subir a imagem
+  5. apontar o healthcheck do Easypanel para `/health`
 
-  As duas são independentes entre si. A de `eventos_de_conta` já foi aplicada
+  As três são independentes entre si. A de `eventos_de_conta` já foi aplicada
   em 12/08 (ver acima). Subir a imagem sem a de setor quebra a edição de setor
-  na primeira gravação, e sem a de `setor_destino` quebra o CRUD de chamados;
-  os dois arquivos terminam com as consultas de verificação.
+  na primeira gravação, e sem a de `setor_destino` ou a de `versao` quebra o
+  CRUD de chamados; os três arquivos terminam com as consultas de verificação.
 
 - **`SETOR_QUALIDADE_ID`: deixar VAZIO (ou ausente) em produção.** Variável
   nova, opcional; sem ela a API sobe normal, a TI funciona igual e a abertura
