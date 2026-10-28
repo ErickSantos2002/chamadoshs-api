@@ -25,6 +25,28 @@ DescricaoChamado = Annotated[str, StringConstraints(strip_whitespace=True, min_l
 # não passa.
 SolucaoChamado = Annotated[str, StringConstraints(strip_whitespace=True, min_length=10)]
 
+# Versão do chamado em que o cliente baseou a escrita (API-4b): a `versao` da
+# última resposta que ele leu. Pré-condição, nunca gravada — ver
+# `app/services/versao_service.py`.
+#
+# `strict=True`: sem ele o Pydantic aceitaria `true` como 1 e "5" como 5.
+#
+# O campo é declarado `VersaoEsperada = None`, e não `Optional[...]`, de
+# propósito. O default não passa pela validação, então AUSENTE vira None e o
+# endpoint decide (428 na Qualidade, segue na TI); já um `null` EXPLÍCITO é
+# validado contra `int` e vira 422 — corpo errado, não versão faltando.
+VersaoEsperada = Annotated[
+    int,
+    Field(
+        strict=True,
+        ge=1,
+        description=(
+            "Versão do chamado na última leitura. Obrigatória em chamado da "
+            "Qualidade (sem ela, 428); divergente da atual, 409."
+        ),
+    ),
+]
+
 
 class PrioridadeEnum(str, Enum):
     BAIXA = "Baixa"
@@ -203,6 +225,9 @@ class ChamadoUpdate(BaseModel):
 
     A validação só roda no campo que vem na requisição: o que não é enviado
     não é validado, e o handler grava com `exclude_unset=True`.
+
+    `versao_esperada` não é campo do chamado: o handler a tira do que grava.
+    Obrigatória em chamado da Qualidade; na TI, opcional e conferida se vier.
     """
 
     titulo: Optional[TituloChamado] = None
@@ -215,6 +240,21 @@ class ChamadoUpdate(BaseModel):
     solucao: Optional[SolucaoChamado] = None
     observacoes: Optional[str] = None
     avaliacao: Optional[int] = Field(None, ge=1, le=5)
+    versao_esperada: VersaoEsperada = None
+
+
+class ChamadoMarca(BaseModel):
+    """
+    Corpo opcional de PATCH /cancelar, /arquivar e /desarquivar (API-4b).
+
+    As três rotas não tinham corpo, e na TI continuam não precisando: sem
+    corpo, ou sem o campo, seguem como antes. Em chamado da Qualidade a versão
+    é obrigatória (428). Campo desconhecido é ignorado, como no PUT — o corpo
+    era ignorado inteiro até aqui. O motivo do cancelamento continua indo
+    pelo PUT (ver `SolucaoChamado`).
+    """
+
+    versao_esperada: VersaoEsperada = None
 
 
 class ChamadoAvaliacao(BaseModel):
@@ -245,6 +285,10 @@ class ChamadoAtendimento(BaseModel):
     Aberto e Fechado não são destinos: nenhuma ação de atendimento leva a
     eles. A transição a partir do status atual é conferida no endpoint, que
     conhece o chamado.
+
+    `versao_esperada` é obrigatória, mas declarada opcional: a falta dela é
+    428, decidida no endpoint depois da autorização, e não o 422 que o
+    Pydantic daria antes de saber quem pede.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -253,6 +297,7 @@ class ChamadoAtendimento(BaseModel):
     solucao: Optional[SolucaoChamado] = Field(
         None, description="Obrigatória ao resolver; não enviar nos outros status."
     )
+    versao_esperada: VersaoEsperada = None
 
     @model_validator(mode="after")
     def _solucao_so_ao_resolver(self) -> "ChamadoAtendimento":
@@ -284,8 +329,8 @@ class ChamadoResponse(ChamadoBase):
     data_resolucao: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
-    # Versão do chamado (API-4a): sobe a cada mudança gravada. Só leitura por
-    # enquanto — nenhuma escrita a confere ainda (`versao_esperada` é API-4b).
+    # Versão do chamado (API-4a): sobe a cada mudança gravada. É o valor que o
+    # cliente devolve em `versao_esperada` na próxima escrita (API-4b).
     versao: int
     sla: Optional[SLAInfo] = None
 

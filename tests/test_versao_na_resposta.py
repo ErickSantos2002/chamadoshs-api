@@ -9,9 +9,10 @@ O que estes testes travam é que o campo novo não mudou mais nada:
 
 - toda resposta de chamado traz `versao`, um inteiro;
 - os campos de antes continuam todos lá, com os mesmos nomes;
-- nenhum corpo de escrita mudou: o PUT ignora `versao` e `versao_esperada`
-  como sempre ignorou campo desconhecido, nenhum deles é exigido, e o
-  atendimento continua recusando campo a mais (422).
+- `versao` não é campo de escrita: o PUT a ignora como qualquer campo
+  desconhecido, e o atendimento a recusa como campo a mais (422).
+
+A pré-condição `versao_esperada` (API-4b) está em `test_precondicao_de_versao.py`.
 """
 
 import pytest
@@ -83,7 +84,7 @@ class TestTodaRespostaDeChamadoTrazVersao:
         _confere(
             cliente.patch(
                 f"/api/v1/chamados/{d['chamado_qualidade_id']}/atendimento",
-                json={"status": "Em Andamento"},
+                json={"status": "Em Andamento", "versao_esperada": 1},
                 headers=autenticar(d["atendente_id"], "ana.qualidade", "Usuario"),
             )
         )
@@ -119,13 +120,10 @@ class TestOsCorposDeEscritaNaoMudaram:
         assert resposta.status_code == 200
         assert resposta.json()["prioridade"] == "Alta"
 
-    @pytest.mark.parametrize("campo", ["versao", "versao_esperada"])
-    def test_put_ignora_versao_no_corpo_como_qualquer_campo_desconhecido(
-        self, cliente, dados, sessao, autenticar, campo
-    ):
+    def test_put_ignora_versao_no_corpo_como_qualquer_campo_desconhecido(self, cliente, dados, sessao, autenticar):
         resposta = cliente.put(
             f"/api/v1/chamados/{dados['chamado_id']}",
-            json={"status": "Em Andamento", campo: 99},
+            json={"status": "Em Andamento", "versao": 99},
             headers=_admin(autenticar, dados),
         )
         assert resposta.status_code == 200
@@ -133,12 +131,13 @@ class TestOsCorposDeEscritaNaoMudaram:
         sessao.expire_all()
         assert sessao.get(Chamado, dados["chamado_id"]).versao == 1
 
-    def test_atendimento_continua_recusando_campo_a_mais(self, cliente, chamado_qualidade, autenticar):
-        """`extra="forbid"` no ChamadoAtendimento: `versao_esperada` é API-4b, não daqui."""
+    def test_atendimento_recusa_versao_como_campo_a_mais(self, cliente, chamado_qualidade, autenticar):
+        """`extra="forbid"` no ChamadoAtendimento: o campo de escrita é `versao_esperada`."""
         d = chamado_qualidade
         resposta = cliente.patch(
             f"/api/v1/chamados/{d['chamado_qualidade_id']}/atendimento",
-            json={"status": "Em Andamento", "versao_esperada": 1},
+            json={"status": "Em Andamento", "versao_esperada": 1, "versao": 1},
             headers=autenticar(d["atendente_id"], "ana.qualidade", "Usuario"),
         )
         assert resposta.status_code == 422
+        assert resposta.json()["detail"][0]["loc"] == ["body", "versao"]

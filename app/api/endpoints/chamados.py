@@ -472,8 +472,8 @@ def atualizar_chamado(
     status_anterior = chamado.status
     tecnico_anterior = chamado.tecnico_responsavel_id
 
-    # Atualizar campos
-    update_data = chamado_data.model_dump(exclude_unset=True)
+    # Atualizar campos. `versao_esperada` é pré-condição, não coluna.
+    update_data = chamado_data.model_dump(exclude_unset=True, exclude={"versao_esperada"})
     for field, value in update_data.items():
         setattr(chamado, field, value)
 
