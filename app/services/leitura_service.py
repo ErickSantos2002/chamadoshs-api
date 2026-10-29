@@ -39,8 +39,9 @@ só administrador e o vínculo direto o leem.
 
 from typing import FrozenSet
 
+from fastapi import HTTPException, status
 from sqlalchemy import or_
-from sqlalchemy.orm import Query
+from sqlalchemy.orm import Query, Session
 
 from app.api.deps import is_admin, is_staff
 from app.core.config import settings
@@ -101,3 +102,26 @@ def escopo_de_leitura(query: Query, usuario: Usuario) -> Query:
     if setores:
         condicoes.append(Chamado.setor_destino.in_(sorted(setores)))
     return query.filter(or_(*condicoes))
+
+
+CHAMADO_NAO_ENCONTRADO = "Chamado não encontrado"
+
+
+class ChamadoNaoEncontrado(HTTPException):
+    """
+    404 do chamado que não existe E do que existe mas a pessoa não pode ler
+    (D6): mesmo status, mesmo corpo, para que tentar ids não diga quais
+    existem. `HTTPException`, e não exceção de domínio, pelo mesmo motivo de
+    `versao_service`: não repetir a tradução em cada rota.
+    """
+
+    def __init__(self):
+        super().__init__(status_code=status.HTTP_404_NOT_FOUND, detail=CHAMADO_NAO_ENCONTRADO)
+
+
+def buscar_chamado_legivel(db: Session, chamado_id: int, usuario: Usuario) -> Chamado:
+    """O chamado, se existir e `usuario` puder lê-lo; senão `ChamadoNaoEncontrado`."""
+    chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
+    if chamado is None or not pode_ler_chamado(usuario, chamado):
+        raise ChamadoNaoEncontrado()
+    return chamado

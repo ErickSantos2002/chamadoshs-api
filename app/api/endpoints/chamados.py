@@ -40,6 +40,7 @@ from app.services.chamado_service import (
     registrar_historico,
     transicao_permitida,
 )
+from app.services.leitura_service import buscar_chamado_legivel, escopo_de_leitura
 from app.services.qualidade_service import (
     AtendenteInelegivel,
     AtendenteNaoEncontrado,
@@ -231,13 +232,18 @@ def listar_chamados(
     setor_destino: Optional[SetorDestinoEnum] = None,
     incluir_cancelados: bool = False,
     incluir_arquivados: bool = False,
+    current_user: Usuario = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Lista todos os chamados com filtros opcionais.
+    Lista os chamados que o usuário pode ler, com filtros opcionais.
     Por padrão, exclui chamados cancelados e arquivados.
+
+    O escopo de leitura entra primeiro (API-5): os filtros abaixo só estreitam
+    o que já é permitido — `solicitante_id` de outra pessoa não traz os
+    chamados dela —, e o offset e o limit cortam a página desse conjunto.
     """
-    query = db.query(Chamado)
+    query = escopo_de_leitura(db.query(Chamado), current_user)
 
     # Filtros padrão para excluir cancelados e arquivados
     if not incluir_cancelados:
@@ -281,13 +287,17 @@ def listar_atendentes_qualidade(db: Session = Depends(get_db)):
 
 
 @router.get("/{chamado_id}", response_model=ChamadoResponse)
-def buscar_chamado(chamado_id: int, db: Session = Depends(get_db)):
+def buscar_chamado(
+    chamado_id: int,
+    current_user: Usuario = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
-    Busca um chamado específico por ID
+    Busca um chamado específico por ID, se o usuário puder lê-lo.
+
+    Quem não pode recebe o mesmo 404 de um id que não existe (API-5, D6).
     """
-    chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
-    if not chamado:
-        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+    chamado = buscar_chamado_legivel(db, chamado_id, current_user)
     return _anexar_sla([chamado], db)[0]
 
 
