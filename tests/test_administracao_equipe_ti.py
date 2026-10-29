@@ -20,6 +20,7 @@ conta autenticada: o formulário de abertura de chamado depende delas.
 
 import pytest
 import requests
+from sqlalchemy import text
 
 import main
 from app.api.deps import EQUIPE_TI_NEGADA
@@ -103,8 +104,9 @@ def administracao(cenario_de_leitura, sessao):
         Setor(id=SETOR_VAZIO, nome="Almoxarifado", ativo=True),
         Setor(id=SETOR_PARA_EXCLUIR, nome="Projeto Encerrado", ativo=True),
         Categoria(id=CATEGORIA_SEM_USO, nome="Sem uso"),
-        SLAConfig(prioridade="Alta", minutos_resposta=30, minutos_resolucao=240),
     ])
+    # merge: o schema do PostgreSQL já semeia os prazos; o SQLite não.
+    sessao.merge(SLAConfig(prioridade="Alta", minutos_resposta=30, minutos_resolucao=240))
     sessao.flush()
     sessao.add_all([
         Usuario(id=PERFIL_DESCONHECIDO, nome="auditor.ti", role_id=4, setor_id=1, ativo=True),
@@ -113,6 +115,13 @@ def administracao(cenario_de_leitura, sessao):
         ),
     ])
     sessao.commit()
+    if sessao.bind.dialect.name == "postgresql":
+        # Os ids acima são explícitos; sem isto o POST seguinte pegaria o 1.
+        for tabela in ("setores", "categorias", "tarefas_recorrentes"):
+            sessao.execute(text(
+                f"SELECT setval(pg_get_serial_sequence('{tabela}', 'id'), (SELECT MAX(id) FROM {tabela}))"
+            ))
+        sessao.commit()
     return {
         **cenario_de_leitura,
         "perfil_desconhecido": PERFIL_DESCONHECIDO,
