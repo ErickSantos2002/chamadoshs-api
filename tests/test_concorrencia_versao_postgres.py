@@ -455,9 +455,11 @@ class TestReatribuicaoEAtendimento:
         )
 
         _ok(a)
-        # A autorização, relida sob o lock, vem antes da versão: 403, e sem versao_atual.
-        assert b.status_code == 403
-        assert b.json() == {"detail": "Só o responsável atual pode atender este chamado"}
+        # A leitura, relida sob o lock, vem antes da versão: com a reatribuição
+        # ela perdeu o chamado (D4), e ouve o 404 de um id que não existe (API-6,
+        # D12) — era o 403 "Só o responsável atual". Sem versao_atual.
+        assert b.status_code == 404
+        assert b.json() == {"detail": "Chamado não encontrado"}
         estado = _estado(sessao)
         assert (estado["tecnico_responsavel_id"], estado["status"], estado["historicos"]) == (
             d["tecnico_da_qualidade_id"], "Aberto", [],
@@ -484,7 +486,8 @@ class TestReatribuicaoEAtendimento:
         # ...a reatribuição válida passa, e o antigo responsável deixa de atender.
         _ok(_put(cliente, {"tecnico_responsavel_id": d["tecnico_da_qualidade_id"], "versao_esperada": v0 + 1}, admin))
         antigo = _atender(cliente, {"status": "Aguardando", "versao_esperada": v0 + 2}, _atendente(autenticar, d))
-        assert antigo.status_code == 403 and "versao_atual" not in antigo.json()
+        # 404 desde a API-6 (D12): sem a atribuição, ela não lê mais o chamado.
+        assert antigo.status_code == 404 and antigo.json() == {"detail": "Chamado não encontrado"}
         estado = _estado(sessao)
         assert (estado["tecnico_responsavel_id"], estado["status"], estado["versao"]) == (
             d["tecnico_da_qualidade_id"], "Em Andamento", v0 + 2,
