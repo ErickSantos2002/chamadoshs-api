@@ -73,7 +73,7 @@ def sessao():
 
 
 @pytest.fixture
-def dados(sessao):
+def dados(sessao, monkeypatch):
     """
     Popula o mínimo para exercitar autoria: três perfis, um chamado e uma
     tarefa recorrente.
@@ -81,7 +81,14 @@ def dados(sessao):
     Devolve um dicionário simples em vez dos objetos ORM: depois de um commit
     dentro do handler, instâncias presas a outra sessão expiram, e comparar
     ids evita esse tipo de falso negativo.
+
+    O setor 1 é declarado da TI em `SETORES_TI_IDS` (API-6): sem isso o
+    técnico 20 não teria alcance de TI. Id do banco de teste, não de produção
+    — ali os ids saem do cadastro real.
     """
+    import main
+
+    monkeypatch.setattr(main.settings, "SETORES_TI_IDS", "1")
     for role_id, nome in ROLES:
         sessao.add(Role(id=role_id, nome=nome))
     sessao.add(Setor(id=1, nome="TI"))

@@ -1,10 +1,53 @@
 import logging
+import re
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
-from typing import List, Optional
+from typing import FrozenSet, List, NamedTuple, Optional
 
 logger = logging.getLogger(__name__)
+
+
+class SetoresTI(NamedTuple):
+    """
+    `SETORES_TI_IDS` interpretada. `estado` é um de:
+
+    - "ausente": variável não definida;
+    - "vazia": definida sem nenhum id;
+    - "valida": todos os itens são ids;
+    - "invalida": algum item não é id — a lista inteira é descartada.
+
+    Fora de "valida", `ids` é vazio: nenhum setor vale como TI.
+    """
+
+    estado: str
+    ids: FrozenSet[int]
+    duplicados: bool = False
+
+
+# [0-9], e não \d: \d aceita dígitos de outros alfabetos, que int() converte.
+_ID_DE_SETOR = re.compile(r"[0-9]+")
+
+
+def interpretar_setores_ti(valor: Optional[str]) -> SetoresTI:
+    """
+    Lê `SETORES_TI_IDS`: ids inteiros positivos separados por vírgula.
+
+    Um item inválido descarta a lista inteira, em vez de aproveitar os
+    válidos: "1,2O" com a letra no lugar do zero deixaria o setor 20 de fora
+    sem ninguém perceber, e quem confere a configuração precisa ver que ela
+    está quebrada, não meio aplicada. Repetidos são juntados.
+    """
+    if valor is None:
+        return SetoresTI("ausente", frozenset())
+    texto = str(valor).strip()
+    if not texto:
+        return SetoresTI("vazia", frozenset())
+    itens = [item.strip() for item in texto.split(",")]
+    if not all(_ID_DE_SETOR.fullmatch(item) and int(item) > 0 for item in itens):
+        return SetoresTI("invalida", frozenset())
+    numeros = [int(item) for item in itens]
+    return SetoresTI("valida", frozenset(numeros), duplicados=len(set(numeros)) != len(numeros))
 
 
 class Settings(BaseSettings):
@@ -97,6 +140,63 @@ class Settings(BaseSettings):
             )
             return None
         return numero
+
+    # Setores da equipe de TI (ids em `setores`), separados por vírgula: "1"
+    # ou "1,7". É o que faz um técnico ser da TI (API-6, D10): ler os chamados
+    # da TI e da Qualidade, alterá-los e ser responsável por chamado da TI.
+    #
+    # Sem valor padrão, e sem exemplo: os ids mudam por ambiente e só quem
+    # confere o cadastro real pode dizê-los (ver os SELECTs do CHANGELOG).
+    # Nome de setor não serve, pelo mesmo motivo de SETOR_QUALIDADE_ID.
+    #
+    # Ausente, vazia ou inválida, nenhum setor é da TI: técnico nenhum tem
+    # alcance de TI, e cada um fica só com o vínculo direto (o que abriu e o
+    # que atende). A API sobe assim mesmo — login, abertura de chamado e a
+    # Qualidade não dependem disto — e o aviso vai para o log. O id da
+    # Qualidade nunca vale como TI, mesmo que esteja na lista.
+    #
+    # Texto cru, e não lista: o pydantic-settings desta versão lê lista do
+    # ambiente como JSON, e "1,7" derrubaria a API na subida.
+    SETORES_TI_IDS: Optional[str] = None
+
+    @property
+    def setores_ti(self) -> SetoresTI:
+        return interpretar_setores_ti(self.SETORES_TI_IDS)
+
+    @property
+    def setores_ti_ids(self) -> FrozenSet[int]:
+        """Os setores que valem como TI agora, já sem o da Qualidade."""
+        ids = self.setores_ti.ids
+        if self.SETOR_QUALIDADE_ID is not None:
+            ids = ids - {self.SETOR_QUALIDADE_ID}
+        return ids
+
+    @model_validator(mode="after")
+    def _avisar_setores_ti(self):
+        # Só avisa: a regra é aplicada em `setores_ti_ids`, a cada leitura.
+        # Lido uma vez, na subida, que é quando quem configura olha o log.
+        lidos = self.setores_ti
+        if lidos.estado == "ausente":
+            logger.warning(
+                "SETORES_TI_IDS não definida: nenhum técnico tem alcance de TI "
+                "(leitura e alteração só pelo vínculo direto)"
+            )
+        elif lidos.estado == "vazia":
+            logger.warning("SETORES_TI_IDS vazia: nenhum técnico tem alcance de TI")
+        elif lidos.estado == "invalida":
+            logger.warning(
+                "SETORES_TI_IDS=%r não é uma lista de ids; nenhum técnico tem alcance de TI",
+                self.SETORES_TI_IDS,
+            )
+        else:
+            if lidos.duplicados:
+                logger.warning("SETORES_TI_IDS tem ids repetidos; cada um vale uma vez")
+            if self.SETOR_QUALIDADE_ID is not None and self.SETOR_QUALIDADE_ID in lidos.ids:
+                logger.warning(
+                    "SETORES_TI_IDS inclui o setor da Qualidade (%s); ele não vale como TI",
+                    self.SETOR_QUALIDADE_ID,
+                )
+        return self
 
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:5173"

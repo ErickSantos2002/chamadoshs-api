@@ -44,18 +44,21 @@ def test_escopo_sql_e_predicado_dizem_o_mesmo(cenario_de_leitura, sessao, quem):
 
 
 class TestCasosDeBorda:
-    def test_sem_setor_qualidade_configurado_tecnico_com_setor_le_os_dois(
+    def test_sem_setor_qualidade_configurado_o_tecnico_dela_nao_vira_ti(
         self, cenario_de_leitura, sessao, monkeypatch
     ):
         """
-        Produção hoje: sem `SETOR_QUALIDADE_ID`, ninguém é da Qualidade, e o
-        técnico com setor continua lendo tudo, como sempre leu.
+        Sem `SETOR_QUALIDADE_ID`, ninguém é da Qualidade — e o técnico que
+        seria dela não cai na TI por exclusão (D10; até a API-5, caía). O da
+        TI, declarado em `SETORES_TI_IDS`, segue lendo os dois.
         """
         import main
 
         monkeypatch.setattr(main.settings, "SETOR_QUALIDADE_ID", None)
         tecnico_q = _usuario(sessao, cenario_de_leitura["tecnico_qualidade"])
-        assert setores_lidos_pelo_perfil(tecnico_q) == {"TI", "QUALIDADE"}
+        tecnico_ti = _usuario(sessao, cenario_de_leitura["tecnico_ti"])
+        assert setores_lidos_pelo_perfil(tecnico_q) == frozenset()
+        assert setores_lidos_pelo_perfil(tecnico_ti) == {"TI", "QUALIDADE"}
 
     def test_tecnico_sem_setor_nao_le_por_perfil(self, cenario_de_leitura, sessao):
         tecnico = _usuario(sessao, cenario_de_leitura["tecnico_sem_setor"])

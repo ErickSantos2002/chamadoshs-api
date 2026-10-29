@@ -23,14 +23,21 @@ A regra (decisões D1–D5, aprovadas em 29/10/2026):
    setor do solicitante não conta (D5).
 3. Técnico da Qualidade — perfil Técnico no setor de `SETOR_QUALIDADE_ID` —
    lê os chamados da Qualidade (D2), e da TI só os do item 2.
-4. Técnico da TI — perfil Técnico em qualquer outro setor — lê os dois
-   setores de destino (D1).
-5. Técnico sem setor não tem leitura por perfil, só a do item 2: sem setor
-   não dá para dizer de qual equipe ele é, e o padrão aqui é fechar.
+4. Técnico da TI — perfil Técnico num setor de `SETORES_TI_IDS` — lê os dois
+   setores de destino (D1). (API-6, D10: até a API-5 era técnico de qualquer
+   setor que não a Qualidade.)
+5. Técnico de outro setor, ou sem setor, não tem leitura por perfil, só a do
+   item 2 (H1): sem setor da TI ou da Qualidade não dá para dizer de qual
+   equipe ele é, e o padrão aqui é fechar. Sem `SETORES_TI_IDS`, é o caso de
+   todo técnico fora da Qualidade.
 
-Só leitura. As escritas seguem com as regras de sempre (`require_staff`, o
-atendimento pelo responsável, a avaliação pelo solicitante): ler um chamado
-da Qualidade não dá ao técnico da TI o atendimento dela.
+O alcance do item 3 e 4 é também o que a equipe pode ALTERAR (API-6, D8 —
+ver `pode_alterar_como_equipe`). O vínculo do item 2 dá leitura, não poder de
+equipe: ser solicitante ou responsável de um chamado da TI não deixa o
+técnico da Qualidade mudá-lo pelas rotas da equipe. As rotas que não são da
+equipe seguem com as regras de sempre (o atendimento pelo responsável, a
+avaliação e o cancelamento pelo solicitante), depois da leitura: ler um
+chamado da Qualidade não dá ao técnico da TI o atendimento dela.
 
 O setor de destino é comparado com os valores do CHECK `chk_setor_destino`
 ("TI", "QUALIDADE"). Valor fora deles não entra em nenhum alcance de perfil:
@@ -63,7 +70,8 @@ def setores_lidos_pelo_perfil(usuario: Usuario) -> FrozenSet[str]:
     Fora do técnico, vazio: o administrador lê tudo por outro caminho, e o
     usuário comum não lê nada só pelo perfil. `settings` é lido a cada
     chamada, como em `qualidade_service`. Sem `SETOR_QUALIDADE_ID`, ninguém é
-    da Qualidade, e todo técnico com setor é da TI — o comportamento de hoje.
+    da Qualidade; sem `SETORES_TI_IDS`, ninguém é da TI. Nenhum dos dois cai
+    no outro: setor que não está em nenhuma das listas não tem alcance.
     """
     if is_admin(usuario) or not is_staff(usuario):
         return _NENHUM
@@ -72,7 +80,10 @@ def setores_lidos_pelo_perfil(usuario: Usuario) -> FrozenSet[str]:
     setor_qualidade = settings.SETOR_QUALIDADE_ID
     if setor_qualidade is not None and usuario.setor_id == setor_qualidade:
         return _SO_QUALIDADE
-    return _OS_DOIS
+    # `setores_ti_ids` já tira o id da Qualidade: a ordem aqui não decide.
+    if usuario.setor_id in settings.setores_ti_ids:
+        return _OS_DOIS
+    return _NENHUM
 
 
 def pode_ler_chamado(usuario: Usuario, chamado: Chamado) -> bool:
@@ -80,6 +91,21 @@ def pode_ler_chamado(usuario: Usuario, chamado: Chamado) -> bool:
     if is_admin(usuario):
         return True
     if chamado.solicitante_id == usuario.id or chamado.tecnico_responsavel_id == usuario.id:
+        return True
+    return chamado.setor_destino in setores_lidos_pelo_perfil(usuario)
+
+
+def pode_alterar_como_equipe(usuario: Usuario, chamado: Chamado) -> bool:
+    """
+    Se `usuario` pode alterar `chamado` pelas rotas da equipe (D8): o PUT, o
+    arquivamento, o desarquivamento e o cancelamento de chamado alheio.
+
+    Administrador altera todos; técnico, os do alcance do perfil — o mesmo de
+    `setores_lidos_pelo_perfil`, para que a equipe não altere o que não lê.
+    O vínculo não entra: o técnico da Qualidade que abriu um chamado da TI o
+    lê, e o cancela como solicitante, mas não o edita como equipe.
+    """
+    if is_admin(usuario):
         return True
     return chamado.setor_destino in setores_lidos_pelo_perfil(usuario)
 

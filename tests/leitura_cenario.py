@@ -28,6 +28,7 @@ OUTRO_SOLICITANTE = 51
 COLEGA_DO_SOLICITANTE = 52  # mesmo setor (TI, 1) do solicitante 30
 EX_RESPONSAVEL = 53  # da Qualidade, já não atende o 103
 TECNICO_SEM_SETOR = 54
+TECNICO_OUTRO_SETOR = 55  # perfil Técnico no Comercial, fora de SETORES_TI_IDS
 
 CHAMADOS = {
     "ti_do_solicitante": 100,  # conftest: TI, solicitante 30
@@ -60,14 +61,17 @@ LEITURA_ESPERADA = {
     },
     "intruso": set(),
     "colega_do_solicitante": set(),  # D5
-    "tecnico_sem_setor": set(),  # sem setor, sem leitura por perfil
+    "tecnico_sem_setor": set(),  # sem setor, sem leitura por perfil (H1)
+    "tecnico_outro_setor": set(),  # D10: setor fora de SETORES_TI_IDS não é TI
     "usuario_sem_setor": set(),
     "conta_de_servico": set(),
 }
 
 # Quem vê comentário interno nos chamados que lê: a regra de sempre (perfil
 # de equipe), que a API-5 não muda.
-EQUIPE = {"admin", "admin_da_qualidade", "tecnico_ti", "tecnico_qualidade", "tecnico_sem_setor"}
+EQUIPE = {
+    "admin", "admin_da_qualidade", "tecnico_ti", "tecnico_qualidade", "tecnico_sem_setor", "tecnico_outro_setor",
+}
 
 ROLE_DE = {
     "admin": "Administrador",
@@ -75,6 +79,7 @@ ROLE_DE = {
     "tecnico_ti": "Tecnico",
     "tecnico_qualidade": "Tecnico",
     "tecnico_sem_setor": "Tecnico",
+    "tecnico_outro_setor": "Tecnico",
 }
 
 
@@ -101,6 +106,7 @@ def cenario_de_leitura(chamado_qualidade, sessao):
         Usuario(id=COLEGA_DO_SOLICITANTE, nome="colega.ti", role_id=3, setor_id=1, ativo=True),
         Usuario(id=EX_RESPONSAVEL, nome="eva.qualidade", role_id=3, setor_id=d["setor_qualidade_id"], ativo=True),
         Usuario(id=TECNICO_SEM_SETOR, nome="tecnico.sem.setor", role_id=2, setor_id=None, ativo=True),
+        Usuario(id=TECNICO_OUTRO_SETOR, nome="tecnico.comercial", role_id=2, setor_id=SETOR_COMERCIAL, ativo=True),
     ])
     sessao.flush()
 
@@ -159,6 +165,7 @@ def cenario_de_leitura(chamado_qualidade, sessao):
         "intruso": INTRUSO,
         "colega_do_solicitante": COLEGA_DO_SOLICITANTE,
         "tecnico_sem_setor": TECNICO_SEM_SETOR,
+        "tecnico_outro_setor": TECNICO_OUTRO_SETOR,
         "usuario_sem_setor": d["sem_setor_id"],
         "conta_de_servico": d["conta_de_servico_id"],
     }
