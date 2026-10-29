@@ -137,3 +137,34 @@ def is_admin(usuario: Usuario) -> bool:
 def is_staff(usuario: Usuario) -> bool:
     atual = _normalizar_role(usuario.role.nome if usuario.role else None)
     return atual in {_normalizar_role(ROLE_ADMIN), _normalizar_role(ROLE_TECNICO)}
+
+
+EQUIPE_TI_NEGADA = "Requer perfil: Administrador ou Técnico da TI"
+
+
+def require_equipe_ti(current_user: Usuario = Depends(get_current_user)) -> Usuario:
+    """
+    Exige administrador ou técnico da TI (API-7, D13): a administração global
+    — setores, categorias, SLA, tarefas recorrentes e a trilha de setor.
+
+    Até a API-6 essas rotas usavam `require_staff`, e técnico de QUALQUER
+    setor as administrava: o da Qualidade, o de outro setor, o sem setor. O
+    perfil sozinho não diz de qual equipe a pessoa é.
+
+    Quem é da TI sai de `integra_equipe_ti`, a mesma regra da API-6 que decide
+    o responsável de chamado da TI e que `/auth/me` devolve à tela — uma regra
+    só, para que a tela, a atribuição e a administração não discordem. Sem
+    `SETORES_TI_IDS` válida, nenhum técnico passa; o administrador passa
+    sempre, pelo perfil, esteja em que setor estiver.
+
+    403, e não 404: são recursos globais, cuja existência não é segredo (D6
+    vale para chamados e comentários). Mesmo corpo para toda recusa.
+    """
+    # Import tardio: `leitura_service` importa `is_admin` e `is_staff` daqui.
+    from app.services.leitura_service import integra_equipe_ti
+
+    # `integra_equipe_ti` já exige perfil de equipe: usuário comum e perfil
+    # desconhecido não passam, nem num setor da TI.
+    if is_admin(current_user) or integra_equipe_ti(current_user):
+        return current_user
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=EQUIPE_TI_NEGADA)
