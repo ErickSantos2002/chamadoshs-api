@@ -15,6 +15,32 @@ router = APIRouter()
 
 logger = logging.getLogger(__name__)
 
+COMENTARIO_NAO_ENCONTRADO = "Comentário não encontrado"
+
+
+def _buscar_comentario_visivel(db: Session, comentario_id: int, usuario: Usuario) -> ComentarioChamado:
+    """
+    O comentário, se `usuario` pode vê-lo HOJE; senão o 404 de um id que não
+    existe.
+
+    Ver é ler o chamado dele (API-5) e, se for interno, ser da equipe. Vale
+    para buscar, editar e excluir (API-6, D11): quem perdeu a leitura do
+    chamado — o ex-responsável, o autor de um comentário de antes da API-5, o
+    técnico da Qualidade num chamado da TI — não mexe mais no que escreveu
+    lá, e a recusa não diz que o comentário existe.
+    """
+    comentario = db.query(ComentarioChamado).filter(ComentarioChamado.id == comentario_id).first()
+    chamado = db.query(Chamado).filter(Chamado.id == comentario.chamado_id).first() if comentario else None
+    if chamado is None or not pode_ler_chamado(usuario, chamado):
+        raise HTTPException(status_code=404, detail=COMENTARIO_NAO_ENCONTRADO)
+
+    if comentario.is_interno and not is_staff(usuario):
+        # 404 em vez de 403: um 403 confirmaria que existe um comentário
+        # interno naquele id.
+        raise HTTPException(status_code=404, detail=COMENTARIO_NAO_ENCONTRADO)
+
+    return comentario
+
 
 @router.get("/chamado/{chamado_id}", response_model=List[ComentarioResponse])
 def listar_comentarios_chamado(
@@ -55,17 +81,7 @@ def buscar_comentario(
     não contorna a regra (API-5). Comentário interno só é devolvido para
     administrador e técnico.
     """
-    comentario = db.query(ComentarioChamado).filter(ComentarioChamado.id == comentario_id).first()
-    chamado = db.query(Chamado).filter(Chamado.id == comentario.chamado_id).first() if comentario else None
-    if chamado is None or not pode_ler_chamado(current_user, chamado):
-        raise HTTPException(status_code=404, detail="Comentário não encontrado")
-
-    if comentario.is_interno and not is_staff(current_user):
-        # 404 em vez de 403: um 403 confirmaria que existe um comentário
-        # interno naquele id.
-        raise HTTPException(status_code=404, detail="Comentário não encontrado")
-
-    return comentario
+    return _buscar_comentario_visivel(db, comentario_id, current_user)
 
 
 @router.post("/", response_model=ComentarioResponse, status_code=status.HTTP_201_CREATED)
@@ -121,11 +137,11 @@ def atualizar_comentario(
     db: Session = Depends(get_db),
 ):
     """
-    Atualiza um comentário existente. Só o autor ou um administrador.
+    Atualiza um comentário existente. Só o autor ou um administrador, e só
+    quem vê o comentário hoje (API-6, D11): quem não vê recebe o 404 de um id
+    que não existe, antes do 403 de autoria.
     """
-    comentario = db.query(ComentarioChamado).filter(ComentarioChamado.id == comentario_id).first()
-    if not comentario:
-        raise HTTPException(status_code=404, detail="Comentário não encontrado")
+    comentario = _buscar_comentario_visivel(db, comentario_id, current_user)
 
     if comentario.usuario_id != current_user.id and not is_admin(current_user):
         raise HTTPException(
@@ -155,11 +171,10 @@ def deletar_comentario(
     db: Session = Depends(get_db),
 ):
     """
-    Deleta um comentário. Só o autor ou um administrador.
+    Deleta um comentário. Só o autor ou um administrador, e só quem vê o
+    comentário hoje — como na edição.
     """
-    comentario = db.query(ComentarioChamado).filter(ComentarioChamado.id == comentario_id).first()
-    if not comentario:
-        raise HTTPException(status_code=404, detail="Comentário não encontrado")
+    comentario = _buscar_comentario_visivel(db, comentario_id, current_user)
 
     if comentario.usuario_id != current_user.id and not is_admin(current_user):
         raise HTTPException(
