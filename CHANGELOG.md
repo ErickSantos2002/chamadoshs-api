@@ -12,6 +12,122 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Segurança — escritas e segregação de setores (API-6)
+- **A equipe só altera o que o perfil dela lê, e a TI passa a ser uma lista
+  explícita de setores.** A auditoria complementar da API-5 (29/10/2026)
+  achou o técnico da Qualidade editando, cancelando e arquivando chamado da
+  TI pelas rotas da equipe — e recebendo na resposta o chamado que não podia
+  ler, com a versão no 409 —, se atribuindo um chamado da TI para passar a
+  lê-lo pelo vínculo, e qualquer conta descobrindo se um id existia pelas
+  recusas de cancelar, avaliar e atender (o atendimento dizia até o setor).
+  Pré-existentes, latentes enquanto ninguém tiver perfil Técnico no setor da
+  Qualidade. Decisões D8–D13 e H1, aprovadas em 29/10/2026.
+
+  **Quem é da TI (D10): `SETORES_TI_IDS`**, ids de setor separados por
+  vírgula, sem valor padrão nem exemplo. Até a API-5, técnico de qualquer
+  setor que não fosse o da Qualidade era da TI. Agora:
+
+  | Conta | Lê por perfil | Altera pelas rotas da equipe | Pode ser responsável da TI |
+  |---|---|---|---|
+  | Administrador | tudo | tudo | se o setor estiver em `SETORES_TI_IDS` |
+  | Técnico de setor em `SETORES_TI_IDS` (D1) | TI e Qualidade | TI e Qualidade | sim |
+  | Técnico do setor de `SETOR_QUALIDADE_ID` (D2) | Qualidade | Qualidade | não |
+  | Técnico de outro setor (D10) | nada | nada | não |
+  | Técnico sem setor (H1) | nada | nada | não |
+  | Usuário comum, qualquer setor | nada | nada | não |
+  | Perfil desconhecido | nada | nada | não |
+
+  Fora do perfil, o **vínculo** de sempre (solicitante ou responsável atual)
+  dá a leitura — **não o poder de equipe**: o técnico da Qualidade que
+  responde por um chamado da TI o lê, mas recebe 403 ao editá-lo.
+
+  Sem lista válida — ausente, vazia ou com algum item que não é id —
+  **nenhum técnico é da TI**: cada um fica só com o vínculo. A API sobe assim
+  mesmo e avisa no log; login, abertura de chamado, a Qualidade e o
+  administrador não dependem dela. Repetidos valem uma vez; o id da
+  Qualidade nunca vale como TI. Lista e não "o que não é Qualidade", para que
+  um técnico de Laboratório ou Diretoria não leia tudo por exclusão.
+
+  **Escritas de chamado (D8, D12):**
+
+  | Rota | Quem não lê o chamado | Quem lê só pelo vínculo | No alcance da equipe |
+  |---|---|---|---|
+  | `PUT /chamados/{id}` | 404 (era 200 para técnico) | 403 "Este chamado não é da sua equipe" | como antes |
+  | `PATCH …/arquivar`, `…/desarquivar` | 404 | 403 | como antes |
+  | `PATCH …/cancelar` | 404 (era 403/200) | o próprio: 200; senão 403 | como antes |
+  | `PATCH …/avaliar` | 404 (era 403) | só o solicitante, como antes | — |
+  | `PATCH …/atendimento` | 404 (era 403 com o setor no texto) | as recusas de antes | — |
+  | `PUT`/`DELETE /comentarios/{id}` (D11) | 404 (era 200/204 para o autor, 403 para os outros) | as de antes | — |
+
+  O perfil Usuário continua com 403 no PUT, arquivar e desarquivar antes de
+  qualquer busca (não distingue ids). O 404 é o mesmo de um id inexistente —
+  status e corpo —, vem antes da versão (428/409), do estado ("já está
+  arquivado") e das recusas do atendimento, e nada é gravado: nem campo, nem
+  histórico, nem webhook, nem versão. Para quem altera, 409, 428, `FOR
+  UPDATE`, histórico atômico da Qualidade e webhook da TI ficam como estavam.
+  A sonda D-6 (`GET /chamados/0/atendimento` → 405) não muda.
+
+  **Responsável de chamado da TI (D9):** só conta da equipe da TI — perfil de
+  equipe num setor de `SETORES_TI_IDS` —, pela conta atribuída e não por quem
+  atribui: nem o administrador entrega chamado da TI a quem é de fora. 400
+  "Técnico responsável não é da equipe da TI". Vale na **mudança**: o chamado
+  antigo com responsável de fora continua editável e ninguém é trocado
+  sozinho. Conta de serviço e id inexistente mantêm as mensagens;
+  desatribuir continua permitido; a Qualidade mantém a elegibilidade dela. O
+  `ativo` do responsável da TI segue sem conferência (pendente).
+
+  **Comentários (D11):** editar e excluir passam pela visibilidade do `GET
+  /comentarios/{id}` — chamado legível e, se interno, perfil de equipe —, e
+  depois a autoria de sempre. O ex-responsável, o autor de comentário de
+  antes da API-5 e o técnico da Qualidade num chamado da TI deixam de mexer
+  no que escreveram lá.
+
+  **D13 — PARCIALMENTE atendida.** As operações de chamado e de comentário
+  respeitam o alcance. **Os cadastros administrativos não:** o perfil Técnico
+  de qualquer setor — Qualidade, outro, sem setor — continua com
+  `require_staff` em:
+
+  | Rotas | Classificação | Risco para a Qualidade |
+  |---|---|---|
+  | `POST/PUT/PATCH/DELETE /setores` | D — sem regra definida | desativar o setor da Qualidade fecha a Qualidade (503); renomear ou excluir setor mexe no cadastro de que `SETORES_TI_IDS` depende |
+  | `POST/PUT/DELETE /categorias` | B — da TI (só chamado da TI tem categoria) | altera a classificação da TI |
+  | `PUT /sla-configs/{prioridade}` | D — o SLA vale para os dois setores | muda prazo da TI |
+  | `/tarefas-recorrentes` (todas) | B — rotinas da TI | lê e executa as rotinas da TI |
+  | `GET /eventos?alvo=setor` | segue setores | lê a trilha de setores |
+
+  Administrador-só e já fechados: usuários (escrita), `/auth/registro`,
+  `/diagnostico`, eventos de conta, `DELETE /chamados`. Restringir os de
+  cima a "administrador ou técnico da TI" é uma troca de dependency por rota,
+  sem migration, mas muda quem administra cadastro: decisão pendente. **Até
+  lá, a Qualidade não deve ser ativada com contas de perfil Técnico no setor
+  dela** — a mitigação é cadastrar a equipe da Qualidade com perfil Usuário,
+  que já atende pela elegibilidade de setor.
+
+  **Diagnóstico:** `GET /api/v1/diagnostico` (administrador) ganha o bloco
+  `equipes`: o estado de `SETORES_TI_IDS`, ids inexistentes ou inativos no
+  cadastro, o conflito com a Qualidade e quantos técnicos ativos ficam sem
+  alcance. Para escolher os ids, `diagnosticos/api6_setores_ti.sql`
+  (somente leitura, `BEGIN READ ONLY … ROLLBACK`) — ver "Ação necessária no
+  deploy".
+
+  **Frontend:** contratos `versao`/`versao_esperada` e formatos de resposta
+  inalterados; o FE-4 funciona. Com a lista configurada, a TI opera como
+  antes. Pendências para um FE-5: o seletor de responsável da TI oferece todo
+  administrador e técnico ativo, e escolher alguém de fora dá o toast do 400
+  (filtrar exige a API expor quem é elegível — não existe rota para isso
+  hoje); o 404 da releitura e da edição de comentário aparece como erro
+  genérico; no modal do Kanban, o chamado antigo e as ações seguem visíveis
+  depois do 404; os menus de cadastro aparecem para técnico de qualquer
+  setor.
+
+  Testes: `test_setores_ti.py` (variável, classificação, rotas com a lista
+  ausente, vazia, inválida, em conflito; diagnóstico),
+  `test_escritas_por_alcance.py` (matriz conta × chamado × operação com o
+  esperado escrito à mão, recusa sem gravar nada e 404 igual ao de
+  inexistente; os seis estados), `test_responsavel_ti.py`,
+  `test_comentarios_edicao.py`, e `test_escritas_por_alcance_postgres.py`,
+  que roda os quatro em PostgreSQL real.
+
 ### Segurança — leitura por chamado (API-5, correção do O-1)
 - **Chamado passa a ser lido só por quem tem relação com ele ou leitura pelo
   perfil.** Até aqui a leitura só exigia token: qualquer conta ativa lia o
@@ -40,7 +156,8 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   Técnico da Qualidade é o de perfil Técnico no setor de
   `SETOR_QUALIDADE_ID`; técnico de qualquer outro setor é da TI; técnico sem
   setor só lê pelo vínculo. Sem `SETOR_QUALIDADE_ID`, como em produção hoje,
-  todo técnico com setor continua lendo tudo.
+  todo técnico com setor continua lendo tudo. **Substituído pela API-6
+  (acima):** técnico da TI passa a ser só o de setor em `SETORES_TI_IDS`.
 
   | Rota | Antes | Agora |
   |---|---|---|
@@ -71,7 +188,8 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   aberto na tela recebe 404, que o FE-4 mostra como erro genérico de
   carregamento — aceitável, mas pede mensagem própria num FE-5.
 
-  **Riscos que ficam**, fora do escopo de leitura:
+  **Riscos que ficam**, fora do escopo de leitura (os três primeiros
+  corrigidos pela API-6, acima):
   - As escritas por perfil devolvem o chamado no corpo. O técnico da
     Qualidade continua com `require_staff` — PUT, cancelar, arquivar e
     desarquivar — também em chamado da TI, e a resposta traz o chamado que
@@ -980,6 +1098,48 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   com `SETOR_QUALIDADE_ID` ligado, expõe também a Qualidade. Voltar a API-5
   com a Qualidade ligada pede desligar a Qualidade junto, ou aceitar o risco
   por escrito.
+
+- **API-6 (escritas e segregação de setores): sem migration e sem frontend
+  novo, mas com variável nova — `SETORES_TI_IDS` — que tem de estar
+  configurada ANTES de a imagem subir.** Sem ela, nenhum técnico é da TI: o
+  quadro da equipe fica vazio, o PUT, o arquivamento e o cancelamento de
+  chamado alheio passam a dar 404, e ninguém pode ser atribuído a chamado da
+  TI. O administrador não é afetado.
+
+  1. **Diagnóstico, por operador autorizado, no banco do ambiente:**
+     `psql "$DATABASE_URL" -v setores_ti='{}' -f diagnosticos/api6_setores_ti.sql`.
+     Somente leitura (transação `READ ONLY`, termina em `ROLLBACK`). Lista
+     setores, técnicos e seus setores, técnicos sem setor, responsáveis por
+     chamado da TI e contas de serviço envolvidas. Não colar o resultado —
+     tem nomes de pessoas — em chamado, documento ou commit.
+  2. **Escolher os ids com quem conhece a equipe.** É decisão humana: o nome
+     do setor não diz quem é da TI ("Suporte" pode ser ou não ser). Rodar de
+     novo com a lista escolhida (`-v setores_ti='{1,7}'`, com os ids reais) e
+     conferir as consultas 5 (chamados da TI com responsável de fora — ficam
+     com ele; nada é trocado sozinho) e 8 (técnicos que passam a ler e
+     alterar só pelo vínculo).
+  3. **Regularizar o cadastro antes de subir** (H1): técnico ativo sem setor,
+     ou em setor fora da lista, que deva continuar sendo da TI, recebe o
+     setor certo. `setor_id` segue opcional no banco.
+  4. **Configurar `SETORES_TI_IDS` no Easypanel** (variável de ambiente do
+     back, formato `1,7`), depois subir a imagem.
+  5. **Conferir:** sem o aviso `SETORES_TI_IDS` no log da subida, e o bloco
+     `equipes` de `GET /api/v1/diagnostico` sem alertas de id inexistente ou
+     inativo.
+
+  Ordem da Qualidade: migrations → API (4c + 5 + 6, com `SETORES_TI_IDS`) →
+  FE-4 → **decisão e correção da D13** (ou equipe da Qualidade só com perfil
+  Usuário) → só então `SETOR_QUALIDADE_ID`.
+
+  **Rollback:** voltar a imagem anterior; nada no banco a desfazer, e o
+  frontend não precisa voltar. `SETORES_TI_IDS` pode ficar: a API-5 a ignora.
+  **Mas o rollback reabre o que a API-6 fechou** — o técnico da Qualidade
+  volta a editar, cancelar e arquivar chamado da TI recebendo o corpo, a se
+  atribuir chamado da TI para lê-lo, as recusas voltam a dizer se o id existe
+  e o setor, o autor sem leitura volta a editar o comentário, e técnico de
+  qualquer setor volta a ser da TI. Com a Qualidade ligada, desligar
+  `SETOR_QUALIDADE_ID` **antes** de voltar a imagem, ou aceitar o risco por
+  escrito.
 
 - **Antes de ligar a Qualidade: concorrência em PostgreSQL.** A API-4b já
   prova em PostgreSQL local, um caso por rota, que a escrita da Qualidade

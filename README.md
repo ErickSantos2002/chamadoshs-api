@@ -200,10 +200,12 @@ por perfil" e "Leitura de chamado").
 - Gerar relatórios completos
 
 ### Técnico
-- Técnico da TI: visualizar os chamados da TI e da Qualidade
-- Técnico da Qualidade (setor de `SETOR_QUALIDADE_ID`): visualizar os
-  chamados da Qualidade, e da TI só os que atende
-- Gerenciar chamados, comentar (inclusive comentário interno) e resolver
+- Técnico da TI (setor listado em `SETORES_TI_IDS`): visualizar e gerenciar
+  os chamados da TI e da Qualidade, e ser responsável por chamado da TI
+- Técnico da Qualidade (setor de `SETOR_QUALIDADE_ID`): visualizar e
+  gerenciar os chamados da Qualidade; da TI, só ver os que abriu ou atende
+- Técnico de outro setor, ou sem setor: só os chamados que abriu ou atende
+- Comentar (inclusive comentário interno) e resolver
 - Gerar relatórios da equipe
 
 ### Usuário
@@ -212,7 +214,15 @@ por perfil" e "Leitura de chamado").
   da Qualidade)
 - Avaliar atendimento
 
-Quem não pode ver um chamado recebe o mesmo 404 de um chamado que não existe.
+Quem não pode ver um chamado recebe o mesmo 404 de um chamado que não existe,
+também ao tentar alterá-lo, cancelá-lo, avaliá-lo, atendê-lo ou mexer nos
+comentários dele.
+
+**`SETORES_TI_IDS` precisa estar configurada:** sem ela nenhum técnico é da
+TI (ver `.env.example` e a seção "Ação necessária no deploy" do
+[CHANGELOG](CHANGELOG.md)). Os ids saem do cadastro de cada ambiente, por
+`diagnosticos/api6_setores_ti.sql`; num banco local criado pelo
+`schema_chamados.sql`, quem decide quais setores são da TI é você.
 
 ## 📊 Fluxo de Chamados
 

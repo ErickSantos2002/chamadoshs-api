@@ -251,9 +251,12 @@ token expirar, então rebaixar alguém só surtiria efeito na renovação.
 excluir setores e categorias; alterar prazos de SLA; excluir chamado;
 `POST /api/v1/auth/registro`; `/api/v1/diagnostico`.
 
-**Administrador ou Técnico:** atualizar, arquivar e desarquivar chamados;
+**Administrador ou Técnico:** atualizar, arquivar e desarquivar chamados —
+só os do alcance do perfil (API-6, ver "Escrita de chamado pela equipe");
 criar, editar e excluir tarefas recorrentes; criar e enxergar comentário
-interno.
+interno. Os cadastros de setores, categorias e SLA, as tarefas recorrentes e
+os eventos de setor seguem com `require_staff` para técnico de **qualquer**
+setor (D13, parcialmente atendida — decisão pendente).
 
 **Qualquer usuário autenticado:** leitura dos cadastros (usuários, setores,
 categorias, prazos de SLA); abrir chamado, para a TI ou para a Qualidade;
@@ -268,8 +271,9 @@ o histórico e os comentários. Decisões D1–D7, aprovadas em 29/10/2026:
 | Quem | Chamado da TI | Chamado da Qualidade |
 |---|---|---|
 | Administrador | lê | lê |
-| Técnico da TI (perfil Técnico, setor que não é o da Qualidade) — D1 | lê | lê |
+| Técnico da TI (perfil Técnico, setor em `SETORES_TI_IDS`) — D1, D10 | lê | lê |
 | Técnico da Qualidade (perfil Técnico no setor de `SETOR_QUALIDADE_ID`) — D2 | só pelo vínculo | lê |
+| Técnico de outro setor, ou sem setor — D10, H1 | só pelo vínculo | só pelo vínculo |
 | Solicitante | o próprio | o próprio |
 | Responsável atual | o atribuído | o atribuído |
 | Ex-responsável sem outro vínculo — D4 | não | não |
@@ -279,11 +283,19 @@ o histórico e os comentários. Decisões D1–D7, aprovadas em 29/10/2026:
 - **Vínculo** é ser o solicitante ou o responsável **atual**. Não há leitura
   por histórico de atribuição: quem deixa de atender deixa de ler, salvo se
   for o solicitante ou tiver leitura por perfil (D4).
-- **Técnico sem setor** não lê por perfil, só pelo vínculo: sem setor não dá
-  para dizer de qual equipe ele é, e a regra fecha. Perfil fora dos três
-  também fica só com o vínculo.
+- **Técnico sem setor, ou de setor fora de `SETORES_TI_IDS` e do da
+  Qualidade,** não lê por perfil, só pelo vínculo (H1, D10): sem setor
+  declarado não dá para dizer de qual equipe ele é, e a regra fecha. Perfil
+  fora dos três também fica só com o vínculo. Até a API-5, técnico de
+  qualquer setor que não fosse o da Qualidade era da TI.
+- **`SETORES_TI_IDS`** (API-6): ids de setor separados por vírgula, sem
+  padrão. Ausente, vazia ou com item que não é id, **nenhum técnico é da TI**
+  — a API sobe e avisa no log. Repetidos valem uma vez; o id da Qualidade
+  nunca vale como TI. Os ids saem do cadastro real, por
+  `diagnosticos/api6_setores_ti.sql` e validação humana.
 - **Sem `SETOR_QUALIDADE_ID`** (Qualidade desligada, como em produção hoje),
-  ninguém é técnico da Qualidade, e todo técnico com setor lê os dois setores.
+  ninguém é técnico da Qualidade — e o técnico do setor que seria dela não
+  vira TI por isso.
 - **Recusa é 404, igual à de um chamado que não existe (D6)** — mesmo status,
   mesmo corpo (`"Chamado não encontrado"`; `"Histórico não encontrado"` e
   `"Comentário não encontrado"` nas rotas por id). Tentar ids não diz quais
@@ -298,15 +310,43 @@ o histórico e os comentários. Decisões D1–D7, aprovadas em 29/10/2026:
   chamado.
 - **Comentar** exige que o chamado exista e que a pessoa possa lê-lo. Antes
   qualquer conta comentava em qualquer chamado; nenhum perfil ganhou
-  comentário que não tinha. Editar e excluir comentário seguem do autor ou do
-  administrador, sem mudança.
-- **Só leitura.** As escritas seguem as regras desta seção: ler a Qualidade
-  não dá ao técnico da TI o atendimento dela, e a regra de leitura não
-  restringe o que `require_staff` já permite escrever.
+  comentário que não tinha. **Editar e excluir** (API-6, D11) exigem ver o
+  comentário hoje — o chamado legível e, se interno, perfil de equipe —, e
+  depois ser o autor ou administrador. Quem não vê recebe o 404 de um id que
+  não existe, antes do 403 de autoria.
+- **A leitura não dá escrita.** Ler a Qualidade não dá ao técnico da TI o
+  atendimento dela, e o vínculo não dá poder de equipe — ver abaixo.
 - **Fora desta regra, de propósito (D7):** `GET /usuarios/` e
   `GET /usuarios/{id}` continuam abertos a qualquer autenticado — o frontend
   monta os nomes da tela com eles, em todos os perfis. A revisão do diretório
   é trabalho à parte.
+
+**Escrita de chamado pela equipe (API-6, D8 e D12):** `PUT /chamados/{id}`,
+`PATCH …/arquivar`, `PATCH …/desarquivar` e o cancelamento de chamado alheio
+só no **alcance do perfil** — o mesmo da leitura por perfil, sem o vínculo:
+administrador, todos; técnico da TI, TI e Qualidade; técnico da Qualidade,
+a Qualidade; os demais, nenhum.
+
+| Quem pede | Resposta |
+|---|---|
+| Perfil Usuário, no PUT, arquivar e desarquivar | 403, antes de buscar o chamado (como antes) |
+| Quem não lê o chamado | 404 `"Chamado não encontrado"`, igual a id inexistente |
+| Quem lê só pelo vínculo (ex.: técnico da Qualidade responsável por chamado da TI) | 403 `"Este chamado não é da sua equipe"` |
+| Equipe com o chamado no alcance | as regras de antes: 428/409 de versão, 400 de estado e de responsável |
+
+Cancelar segue aberto ao solicitante, para o chamado que abriu, qualquer que
+seja o perfil. Avaliar e atender também passam a dar o 404 a quem não lê o
+chamado, antes de qualquer recusa que fale dele — a do atendimento dizia o
+setor. A ordem completa: 401 do token; 403 do perfil (só nas rotas de
+equipe); 422 do corpo; 404 da leitura; 403 da equipe ou da regra da rota;
+428/409 de versão; 400/409 de estado e de transição. Nada é gravado numa
+recusa — nem histórico, nem webhook, nem versão.
+
+**Responsável de chamado da TI (D9):** só conta da equipe da TI — perfil de
+equipe (administrador ou técnico) num setor de `SETORES_TI_IDS` —, pela conta
+atribuída e não por quem atribui; senão 400 `"Técnico responsável não é da
+equipe da TI"`. Vale na mudança: reenviar o responsável atual passa, e o
+chamado antigo com responsável de fora não é trocado sozinho.
 
 **Pelo chamado, não pelo perfil:** `PATCH /chamados/{id}/atendimento` — mudar
 o status e registrar a solução de um chamado da Qualidade. Só o responsável
@@ -318,7 +358,7 @@ outro campo é 422. Avaliar (`PATCH /chamados/{id}/avaliar`, só o solicitante)
 segue o mesmo princípio.
 
 No `PUT` (equipe), trocar o responsável de um chamado da Qualidade só é aceito
-para conta elegível — a mesma regra da abertura. Na TI, nada muda.
+para conta elegível — a mesma regra da abertura. Na TI, vale a D9, acima.
 
 ### Contrato de erro
 
