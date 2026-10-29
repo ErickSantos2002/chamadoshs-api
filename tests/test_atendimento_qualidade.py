@@ -689,8 +689,11 @@ class TestConcorrencia:
 
         resposta = _patch(cliente, d["chamado_qualidade_id"], {"status": "Aguardando"}, cabecalho_anterior)
 
-        assert resposta.status_code == 403
-        assert resposta.json()["detail"] == "Só o responsável atual pode atender este chamado"
+        # 404, e não o 403 "Só o responsável atual": com a reatribuição ela
+        # perdeu a leitura (D4), e quem não lê ouve o mesmo de um id que não
+        # existe (API-6, D12).
+        assert resposta.status_code == 404
+        assert resposta.json() == {"detail": "Chamado não encontrado"}
         chamado = _chamado(sessao, d["chamado_qualidade_id"])
         assert chamado.status == "Em Andamento"
         assert chamado.tecnico_responsavel_id == d["tecnico_da_qualidade_id"]

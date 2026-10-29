@@ -151,3 +151,22 @@ def buscar_chamado_legivel(db: Session, chamado_id: int, usuario: Usuario) -> Ch
     if chamado is None or not pode_ler_chamado(usuario, chamado):
         raise ChamadoNaoEncontrado()
     return chamado
+
+
+FORA_DA_EQUIPE = "Este chamado não é da sua equipe"
+
+
+def buscar_chamado_alteravel(db: Session, chamado_id: int, usuario: Usuario) -> Chamado:
+    """
+    O chamado, para as rotas da equipe (D8 e D12): 404 se `usuario` não o lê,
+    403 se o lê só pelo vínculo.
+
+    O 404 vem antes de tudo o que fala do chamado — versão (409), estado
+    ("já está arquivado"), responsável —, para que a recusa de quem não lê
+    seja a mesma de um id que não existe. O 403 só chega a quem já lê o
+    chamado, e por isso não conta nada que a pessoa não saiba.
+    """
+    chamado = buscar_chamado_legivel(db, chamado_id, usuario)
+    if not pode_alterar_como_equipe(usuario, chamado):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORA_DA_EQUIPE)
+    return chamado

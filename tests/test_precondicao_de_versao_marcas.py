@@ -152,15 +152,18 @@ class TestQualidadeSoNoCancelar:
         assert _chamado(sessao, d["chamado_qualidade_id"]).cancelado is True
 
     @pytest.mark.parametrize("corpo", [None, {"versao_esperada": 9}], ids=["sem-versao", "versao-antiga"])
-    def test_quem_nao_e_solicitante_nem_equipe_e_403_sem_revelar_a_versao(
+    def test_quem_nao_le_o_chamado_e_404_sem_revelar_a_versao(
         self, cliente, chamado_qualidade, sessao, autenticar, corpo
     ):
+        # Era 403: dizia que o id existe. Quem não lê ouve o 404 de um id que
+        # não existe (API-6, D12), antes da versão.
         d = chamado_qualidade
         resposta = _marca(
             cliente, d["chamado_qualidade_id"], "cancelar", autenticar(d["sem_setor_id"], "davi.sem.setor", "Usuario"), corpo
         )
-        assert resposta.status_code == 403
-        assert "versao_atual" not in resposta.json()
+        assert resposta.status_code == 404
+        assert resposta.json() == {"detail": "Chamado não encontrado"}
+        assert _chamado(sessao, d["chamado_qualidade_id"]).cancelado is False
 
     def test_409_de_versao_vem_antes_do_ja_cancelado(self, cliente, chamado_qualidade, sessao, autenticar):
         d = chamado_qualidade

@@ -12,7 +12,6 @@ from app.api.deps import (
     get_current_user,
     get_db,
     is_admin,
-    is_staff,
     require_admin,
     require_staff,
 )
@@ -40,7 +39,14 @@ from app.services.chamado_service import (
     registrar_historico,
     transicao_permitida,
 )
-from app.services.leitura_service import buscar_chamado_legivel, escopo_de_leitura
+from app.services.leitura_service import (
+    ChamadoNaoEncontrado,
+    buscar_chamado_alteravel,
+    buscar_chamado_legivel,
+    escopo_de_leitura,
+    pode_alterar_como_equipe,
+    pode_ler_chamado,
+)
 from app.services.qualidade_service import (
     AtendenteInelegivel,
     AtendenteNaoEncontrado,
@@ -476,12 +482,15 @@ def atualizar_chamado(
     é conferida — mas sem o lock a conferência não impede uma escrita que
     entre entre ela e o UPDATE. Na TI é só um aviso de dado velho, não
     controle de concorrência.
+
+    Só o chamado do alcance da equipe de quem pede (API-6, D8): quem não o
+    lê recebe o 404 de um id que não existe, antes da versão (D12); quem o
+    lê só pelo vínculo, 403. Ordem: 401/403 do token e do perfil; 422 do
+    corpo; 404; 403 da equipe; 428/409 de versão; 400 do responsável.
     """
     _avisar_usuario_id_depreciado("atualizar_chamado", usuario_id, current_user)
 
-    chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
-    if not chamado:
-        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+    chamado = buscar_chamado_alteravel(db, chamado_id, current_user)
 
     # O setor sai da leitura sem trava: o PUT não o altera, e nenhuma rota o
     # altera depois da criação. A trava fica só para a Qualidade.
@@ -600,10 +609,11 @@ def avaliar_chamado(
     dele — a nota mede o atendimento que a equipe prestou, então deixar a
     própria equipe preenchê-la esvaziaria o indicador. Por isso a checagem é
     `solicitante_id != current_user.id` puro, sem escape por perfil.
+
+    Quem não lê o chamado recebe o 404 de um id que não existe (API-6, D12),
+    antes do 403: este diria a qualquer conta que o id existe.
     """
-    chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
-    if not chamado:
-        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+    chamado = buscar_chamado_legivel(db, chamado_id, current_user)
 
     if chamado.solicitante_id != current_user.id:
         raise HTTPException(
@@ -677,12 +687,18 @@ def atender_chamado(
 
     `versao_esperada` é obrigatória (API-4b) e conferida na linha travada,
     depois da autorização. Ordem das recusas: 401/403 do token; 422 do corpo;
-    404; 403/503 da autorização pelo chamado; 428 sem versão; 409 de versão;
-    409 de cancelado/arquivado; 409 de transição.
+    404 (inexistente ou fora da leitura); 403/503 da autorização pelo
+    chamado; 428 sem versão; 409 de versão; 409 de cancelado/arquivado; 409
+    de transição.
+
+    A leitura vem antes da autorização pelo chamado (API-6, D12): as recusas
+    dela dizem o setor ("só chamados da Qualidade") e a quem o chamado está
+    atribuído, e só quem já lê o chamado pode ouvi-las. A leitura é conferida
+    na linha travada, com o responsável que vale para o atendimento.
     """
     chamado = _consulta_do_atendimento(db, chamado_id).first()
-    if not chamado:
-        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+    if chamado is None or not pode_ler_chamado(current_user, chamado):
+        raise ChamadoNaoEncontrado()
 
     try:
         verificar_atendimento(db, chamado, current_user)
@@ -812,18 +828,22 @@ def cancelar_chamado(
     """
     Cancela um chamado (soft delete - apenas marca como cancelado).
 
-    O solicitante pode cancelar o próprio chamado; administrador e técnico
-    cancelam qualquer um. Em chamado da Qualidade, exige `versao_esperada`
-    (ver `_travar_e_conferir_marca`).
+    O solicitante pode cancelar o próprio chamado; a equipe cancela os do
+    alcance dela (API-6, D8): administrador, todos; técnico, os do setor que
+    o perfil lê. Em chamado da Qualidade, exige `versao_esperada` (ver
+    `_travar_e_conferir_marca`).
+
+    Quem não lê o chamado recebe o 404 de um id que não existe (D12), antes
+    do 403 e da versão. Ler pelo vínculo não dá o cancelamento: o responsável
+    que não é o solicitante nem tem o chamado no alcance da equipe recebe 403.
     """
     _avisar_usuario_id_depreciado("cancelar_chamado", usuario_id, current_user)
 
-    chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
-    if not chamado:
-        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+    chamado = buscar_chamado_legivel(db, chamado_id, current_user)
 
-    # Pela leitura sem trava: o solicitante não muda depois da abertura.
-    if not is_staff(current_user) and chamado.solicitante_id != current_user.id:
+    # Pela leitura sem trava: o solicitante não muda depois da abertura, nem
+    # o setor de destino, que decide o alcance da equipe.
+    if not pode_alterar_como_equipe(current_user, chamado) and chamado.solicitante_id != current_user.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Só é possível cancelar chamados abertos por você",
@@ -854,14 +874,13 @@ def arquivar_chamado(
 ):
     """
     Arquiva um chamado (remove da visualização padrão mas mantém no banco).
-    Restrito a administrador ou técnico. Em chamado da Qualidade, exige
+    Restrito à equipe, nos chamados do alcance dela (ver o PUT: 404 para
+    quem não lê, 403 para quem lê só pelo vínculo). Em chamado da Qualidade, exige
     `versao_esperada` (ver `_travar_e_conferir_marca`).
     """
     _avisar_usuario_id_depreciado("arquivar_chamado", usuario_id, current_user)
 
-    chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
-    if not chamado:
-        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+    chamado = buscar_chamado_alteravel(db, chamado_id, current_user)
 
     eh_qualidade = _travar_e_conferir_marca(db, chamado, corpo)
 
@@ -888,14 +907,13 @@ def desarquivar_chamado(
 ):
     """
     Desarquiva um chamado (volta a exibir na visualização padrão).
-    Restrito a administrador ou técnico. Em chamado da Qualidade, exige
+    Restrito à equipe, nos chamados do alcance dela (ver o PUT: 404 para
+    quem não lê, 403 para quem lê só pelo vínculo). Em chamado da Qualidade, exige
     `versao_esperada` (ver `_travar_e_conferir_marca`).
     """
     _avisar_usuario_id_depreciado("desarquivar_chamado", usuario_id, current_user)
 
-    chamado = db.query(Chamado).filter(Chamado.id == chamado_id).first()
-    if not chamado:
-        raise HTTPException(status_code=404, detail="Chamado não encontrado")
+    chamado = buscar_chamado_alteravel(db, chamado_id, current_user)
 
     eh_qualidade = _travar_e_conferir_marca(db, chamado, corpo)
 
