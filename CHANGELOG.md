@@ -12,6 +12,95 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Segurança — administração global da equipe da TI (API-7, D13)
+- **Setores, categorias, SLA, tarefas recorrentes e a trilha de setor
+  deixam de ser de qualquer técnico.** A auditoria D13 (29/10/2026) mostrou
+  que essas rotas seguiam com `require_staff` depois da API-6: técnico da
+  Qualidade, de outro setor ou sem setor criava e renomeava setor, mudava o
+  prazo de SLA dos dois setores, editava categoria, lia, editava, excluía e
+  marcava como feita a rotina da TI, e lia a trilha de setores. Nenhuma
+  escalada de privilégio (escrita em usuário já era só do administrador).
+  Decisões A7-1 a A7-8, aprovadas em 29/10/2026.
+
+  **Nova dependência `require_equipe_ti`** (`app/api/deps.py`): passa o
+  administrador, pelo perfil, em qualquer setor; e o técnico que
+  `integra_equipe_ti` diz ser da TI — a mesma regra da API-6 que decide o
+  responsável de chamado da TI, sem algoritmo paralelo. Recusa com 403
+  `{"detail": "Requer perfil: Administrador ou Técnico da TI"}`; sem token,
+  401 como sempre. 403 e não 404: recursos globais, cuja existência não é
+  segredo (a D6/D12 segue valendo para chamados e comentários).
+
+  | Rota | Admin | Técnico da TI | Técnico da Qualidade, de outro setor, sem setor | Usuário, perfil desconhecido |
+  |---|---|---|---|---|
+  | `POST/PUT /setores`, `PATCH …/desativar`, `…/reativar` (A7-1) | sim | sim | 403 (era sim) | 403 |
+  | `DELETE /setores/{id}` (A7-1) | sim | **403 (era sim)** | 403 (era sim) | 403 |
+  | `POST/PUT/DELETE /categorias` | sim | sim | 403 (era sim) | 403 |
+  | `PUT /sla-configs/{prioridade}` (A7-2) | sim | sim | 403 (era sim) | 403 |
+  | `/tarefas-recorrentes`, as sete rotas, leitura incluída (A7-4) | sim | sim | 403 (era sim) | 403 |
+  | `GET /eventos/` (A7-4) | todos os alvos | só `alvo=setor`, como antes | 403 (era só setor) | 403 |
+  | GET de setores, categorias e SLA | sim | sim | sim | sim (inalterado) |
+  | `/usuarios` (A7-8) | inalterado | inalterado | inalterado | inalterado |
+
+  A exclusão de setor recusada ao técnico usa o 403 de `require_admin`, o
+  mesmo das rotas de usuário (`"Requer perfil: Administrador"`).
+
+  A Qualidade não recebe nenhuma permissão administrativa (A7-3): segue com
+  a leitura, o atendimento e as escritas de chamado das decisões anteriores,
+  e não administra nem o próprio setor por estas rotas. A exclusão de setor
+  pelo administrador mantém as travas de sempre (vínculo com usuário, 400;
+  sem cascata). As validações, os formatos de resposta, a trilha de setor e
+  a identidade do executor da rotina (do token) não mudam. A recusa não
+  grava nada: nem linha, nem evento, nem execução, nem avanço de
+  `proxima_data`.
+
+  **Sem `SETORES_TI_IDS` válida (A7-6)**, nenhum técnico administra; o
+  administrador continua, e login, abertura de chamado e a Qualidade não
+  dependem dela. O log da subida e o alerta do `GET /api/v1/diagnostico`
+  passam a dizer isso.
+
+  **`GET /auth/me` ganha `integra_equipe_ti: bool` (A7-5)**, calculado a
+  cada pedido por `integra_equipe_ti` — o mesmo resultado da trava. Só de
+  resposta: não está no cadastro (mandado no `PUT /usuarios`, é ignorado),
+  no banco nem no token; muda no pedido seguinte a uma troca de setor ou de
+  configuração. **Diz de qual equipe a conta é, não o que ela pode:** o
+  administrador fora de setor da TI recebe `false` e administra assim mesmo.
+  A tela combina os dois: `role === 'Administrador' || integra_equipe_ti`.
+  Campo novo; os de antes não mudam, e o frontend atual o ignora.
+
+  **Riscos residuais:**
+  - **Alteração de SLA e de categoria continua sem trilha** (A7-7): quem
+    mudou o prazo ou a categoria não fica registrado. Fora de escopo, sem
+    tabela nova.
+  - Conta de serviço com perfil Técnico num setor da TI administra, como
+    antes: a regra é a do perfil e do setor, e a recusa da conta de serviço
+    vale só como responsável de chamado.
+  - **Comentário interno é de qualquer perfil Técnico** (fora da D13,
+    achado no inventário): o técnico de outro setor, sem setor ou da
+    Qualidade que lê um chamado pelo vínculo — que o abriu ou o atende — vê
+    e cria comentário interno nele, porque "ser da equipe" ali é `is_staff`.
+    Não é rota administrativa global; fica para decisão.
+  - O diretório de usuários (`GET /usuarios`) segue aberto a qualquer conta
+    autenticada (D7, A7-8).
+
+  **Frontend:** nenhum contrato quebrado; o FE-4 funciona. Até o FE-5,
+  técnico de fora da TI que abrir Cadastros, Tarefas Recorrentes ou
+  Auditoria recebe o toast "Sem permissão" do 403. O FE-5 precisa: ler
+  `integra_equipe_ti` no `AuthContext`; esconder ou bloquear as três áreas
+  (`router.tsx`, `lib/navegacao.ts`) para quem não é administrador nem da
+  TI; tirar o botão de excluir da `SetoresTab` para o técnico; travar a
+  `SlaTab`, que hoje não confere perfil; e ajustar `TarefasRecorrentes`
+  (`podeGerenciar`) e `Auditoria` ao mesmo critério.
+
+  Testes: `test_permissao_equipe_ti.py` (a dependência, 13 tipos de conta ×
+  8 configurações, e o aviso da subida), `test_administracao_equipe_ti.py`
+  (perfil × configuração × as 17 rotas, recusa sem escrita e sem requisição
+  externa, 401, leituras abertas, travas de sempre, eventos por alvo),
+  `test_me_equipe_ti.py` (o campo por perfil e configuração, igual à trava,
+  fora do cadastro e do token) e `test_administracao_equipe_ti_postgres.py`,
+  que roda os dois de rota em PostgreSQL real (o da dependência não usa
+  banco). `test_exclusao_de_setor.py`: o caso do técnico excluindo setor
+  passou de 204 para 403 (A7-1).
+
 ### Segurança — escritas e segregação de setores (API-6)
 - **A equipe só altera o que o perfil dela lê, e a TI passa a ser uma lista
   explícita de setores.** A auditoria complementar da API-5 (29/10/2026)
@@ -82,7 +171,8 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   antes da API-5 e o técnico da Qualidade num chamado da TI deixam de mexer
   no que escreveram lá.
 
-  **D13 — PARCIALMENTE atendida.** As operações de chamado e de comentário
+  **D13 — PARCIALMENTE atendida na API-6; fechada na API-7 (acima).** As
+  operações de chamado e de comentário
   respeitam o alcance. **Os cadastros administrativos não:** o perfil Técnico
   de qualquer setor — Qualidade, outro, sem setor — continua com
   `require_staff` em:
@@ -1140,6 +1230,35 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   qualquer setor volta a ser da TI. Com a Qualidade ligada, desligar
   `SETOR_QUALIDADE_ID` **antes** de voltar a imagem, ou aceitar o risco por
   escrito.
+
+- **API-7 (administração global da TI): sem migration, sem variável nova,
+  sem frontend novo — mas depende da `SETORES_TI_IDS` da API-6 configurada
+  e conferida.** Sem ela, além do que a API-6 já perde, **nenhum técnico
+  administra setores, categorias, SLA, tarefas recorrentes nem lê a trilha
+  de setor**: só o administrador. É o comportamento seguro, não um defeito.
+
+  1. Os mesmos passos 1–5 da API-6, acima: ids reais escolhidos por quem
+     conhece a equipe, técnicos sem setor regularizados.
+  2. **Conferir quem perde a administração:** todo técnico ativo fora dos
+     setores da lista deixa de ver Cadastros, Tarefas Recorrentes e
+     Auditoria (o diagnóstico de `diagnosticos/api6_setores_ti.sql` já lista
+     os técnicos e seus setores). Quem deva continuar administrando recebe o
+     setor certo antes de subir.
+  3. Depois de subir: `GET /api/v1/auth/me` de um técnico da TI devolve
+     `"integra_equipe_ti": true`; o bloco `equipes` do diagnóstico, sem
+     alertas.
+
+  Ordem da Qualidade: migrations → API (4c + 5 + 6 + 7, com
+  `SETORES_TI_IDS`) → FE-4 → FE-5 (recomendado, para a tela não oferecer o
+  que a API recusa) → só então `SETOR_QUALIDADE_ID`. Ligar a Qualidade
+  continua dependendo da política de SLA dela, ainda não aprovada.
+
+  **Rollback:** voltar a imagem da API-6; nada no banco a desfazer, e o
+  frontend não precisa voltar (o campo novo do `/auth/me` só some). **Mas o
+  rollback reabre a D13:** técnico de qualquer setor volta a administrar
+  setores, categorias, SLA e rotinas e a ler a trilha de setor. Com a
+  Qualidade ligada, avaliar desligar `SETOR_QUALIDADE_ID` **antes** de
+  voltar a imagem, ou aceitar o risco por escrito.
 
 - **Antes de ligar a Qualidade: concorrência em PostgreSQL.** A API-4b já
   prova em PostgreSQL local, um caso por rota, que a escrita da Qualidade

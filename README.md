@@ -195,16 +195,21 @@ por perfil" e "Leitura de chamado").
 
 ### Administrador
 - Acesso total ao sistema
-- Gerenciar usuários, setores e categorias
+- Gerenciar usuários, setores (inclusive excluir), categorias, SLA e
+  tarefas recorrentes
 - Visualizar todos os chamados
 - Gerar relatórios completos
 
 ### Técnico
 - Técnico da TI (setor listado em `SETORES_TI_IDS`): visualizar e gerenciar
-  os chamados da TI e da Qualidade, e ser responsável por chamado da TI
+  os chamados da TI e da Qualidade, e ser responsável por chamado da TI;
+  administrar setores (sem excluir), categorias, prazos de SLA e tarefas
+  recorrentes, e ver a trilha de setores
 - Técnico da Qualidade (setor de `SETOR_QUALIDADE_ID`): visualizar e
   gerenciar os chamados da Qualidade; da TI, só ver os que abriu ou atende
 - Técnico de outro setor, ou sem setor: só os chamados que abriu ou atende
+- Fora da TI, nenhum técnico administra cadastros, SLA ou rotinas — nem o da
+  Qualidade (API-7)
 - Comentar (inclusive comentário interno) e resolver
 - Gerar relatórios da equipe
 
@@ -219,7 +224,7 @@ também ao tentar alterá-lo, cancelá-lo, avaliá-lo, atendê-lo ou mexer nos
 comentários dele.
 
 **`SETORES_TI_IDS` precisa estar configurada:** sem ela nenhum técnico é da
-TI (ver `.env.example` e a seção "Ação necessária no deploy" do
+TI, e a administração fica só com o administrador (ver `.env.example` e a seção "Ação necessária no deploy" do
 [CHANGELOG](CHANGELOG.md)). Os ids saem do cadastro de cada ambiente, por
 `diagnosticos/api6_setores_ti.sql`; num banco local criado pelo
 `schema_chamados.sql`, quem decide quais setores são da TI é você.

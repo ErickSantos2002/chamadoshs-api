@@ -93,9 +93,21 @@ Authorization: Bearer {seu_token_jwt}
   "nome": "joao.silva",
   "setor_id": 1,
   "role_id": 2,
-  "ativo": true
+  "ativo": true,
+  "integra_equipe_ti": true
 }
 ```
+
+`integra_equipe_ti` (API-7) diz se a conta é da equipe da TI: perfil
+Administrador ou Técnico num setor de `SETORES_TI_IDS`. É calculado a cada
+pedido pela mesma regra de `require_equipe_ti` — não está no banco, no
+cadastro nem no token, e muda no pedido seguinte a uma troca de setor ou de
+configuração. Sem `SETORES_TI_IDS` válida, é `false` para todos.
+
+Diz de qual equipe a conta é, **não o que ela pode**: o administrador fora de
+um setor da TI recebe `false` e administra assim mesmo, pelo perfil. Para
+decidir se mostra a administração, a tela combina os dois —
+`role === 'Administrador' || integra_equipe_ti`. Quem protege é a API.
 
 **Erros:**
 - `401 Unauthorized`: Token inválido ou expirado
@@ -231,7 +243,7 @@ Perfis: `Administrador` (role_id 1), `Tecnico` (2), `Usuario` (3).
 Use as dependencies de `app/api/deps.py`:
 
 ```python
-from app.api.deps import require_admin, require_staff
+from app.api.deps import require_admin, require_equipe_ti, require_staff
 
 @router.delete("/{item_id}")
 def excluir(item_id: int, _admin: Usuario = Depends(require_admin)):
@@ -239,7 +251,11 @@ def excluir(item_id: int, _admin: Usuario = Depends(require_admin)):
 ```
 
 - `require_admin` — só Administrador
-- `require_staff` — Administrador ou Técnico
+- `require_equipe_ti` — Administrador, ou Técnico da TI (setor em
+  `SETORES_TI_IDS`, pela `integra_equipe_ti` da API-6). Para a administração
+  global; recusa com 403 `"Requer perfil: Administrador ou Técnico da TI"`
+- `require_staff` — Administrador ou Técnico, de qualquer setor. Não serve
+  para recurso global: o perfil sozinho não diz de qual equipe a pessoa é
 - `require_roles("A", "B")` — fábrica, para combinações fora dessas duas
 - `is_admin(u)` / `is_staff(u)` — predicados, para regras de dono-ou-admin
   dentro do handler
@@ -247,16 +263,32 @@ def excluir(item_id: int, _admin: Usuario = Depends(require_admin)):
 O perfil é lido do banco, não da claim do JWT: a claim fica congelada até o
 token expirar, então rebaixar alguém só surtiria efeito na renovação.
 
-**Administrador:** criar, editar e desativar usuários; criar, editar e
-excluir setores e categorias; alterar prazos de SLA; excluir chamado;
-`POST /api/v1/auth/registro`; `/api/v1/diagnostico`.
+**Administrador:** criar, editar e desativar usuários; **excluir setor**
+(A7-1); excluir chamado; eventos de conta; `POST /api/v1/auth/registro`;
+`/api/v1/diagnostico`.
+
+**Administrador ou Técnico da TI** (`require_equipe_ti`, API-7, D13): criar,
+editar, desativar e reativar setor; criar, editar e excluir categoria;
+alterar prazo de SLA; as sete rotas de tarefas recorrentes, leitura
+incluída; a trilha de setor (`GET /eventos/`, só `alvo=setor` para o
+técnico). Técnico da Qualidade, de outro setor e sem setor recebem 403, e o
+banco fica como estava. Sem `SETORES_TI_IDS` válida, só o administrador.
+
+| Rota | Admin | Técnico da TI | Técnico da Qualidade / outro setor / sem setor | Usuário |
+|---|---|---|---|---|
+| Escrita de setor (exceto excluir) | sim | sim | 403 | 403 |
+| `DELETE /setores/{id}` | sim | 403 | 403 | 403 |
+| Escrita de categoria | sim | sim | 403 | 403 |
+| `PUT /sla-configs/{prioridade}` | sim | sim | 403 | 403 |
+| `/tarefas-recorrentes` (todas) | sim | sim | 403 | 403 |
+| `GET /eventos/` | todos os alvos | só setor | 403 | 403 |
+
+A Qualidade não tem permissão administrativa global (A7-3). Alteração de SLA
+e de categoria não tem trilha própria (risco residual, A7-7).
 
 **Administrador ou Técnico:** atualizar, arquivar e desarquivar chamados —
 só os do alcance do perfil (API-6, ver "Escrita de chamado pela equipe");
-criar, editar e excluir tarefas recorrentes; criar e enxergar comentário
-interno. Os cadastros de setores, categorias e SLA, as tarefas recorrentes e
-os eventos de setor seguem com `require_staff` para técnico de **qualquer**
-setor (D13, parcialmente atendida — decisão pendente).
+criar e enxergar comentário interno nos chamados que lê.
 
 **Qualquer usuário autenticado:** leitura dos cadastros (usuários, setores,
 categorias, prazos de SLA); abrir chamado, para a TI ou para a Qualidade;
