@@ -167,7 +167,10 @@ def _diagnostico_das_equipes(db: Session) -> dict:
 
     alertas = []
     if lidos.estado != "valida" or not settings.setores_ti_ids:
-        alertas.append(f"⚠️ SETORES_TI_IDS {lidos.estado}: nenhum técnico tem alcance de TI")
+        alertas.append(
+            f"⚠️ SETORES_TI_IDS {lidos.estado}: nenhum técnico tem alcance de TI "
+            "nem administra cadastros; só o administrador"
+        )
     inexistentes = sorted(i for i in lidos.ids if i not in setores)
     inativos = sorted(i for i, s in setores.items() if not s.ativo)
     if inexistentes:

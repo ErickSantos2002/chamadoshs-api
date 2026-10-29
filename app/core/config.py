@@ -143,7 +143,9 @@ class Settings(BaseSettings):
 
     # Setores da equipe de TI (ids em `setores`), separados por vírgula: "1"
     # ou "1,7". É o que faz um técnico ser da TI (API-6, D10): ler os chamados
-    # da TI e da Qualidade, alterá-los e ser responsável por chamado da TI.
+    # da TI e da Qualidade, alterá-los e ser responsável por chamado da TI. E
+    # administrar setores, categorias, SLA, tarefas recorrentes e a trilha de
+    # setor (API-7, D13), que sem ela ficam só com o administrador.
     #
     # Sem valor padrão, e sem exemplo: os ids mudam por ambiente e só quem
     # confere o cadastro real pode dizê-los (ver os SELECTs do CHANGELOG).
@@ -179,13 +181,18 @@ class Settings(BaseSettings):
         if lidos.estado == "ausente":
             logger.warning(
                 "SETORES_TI_IDS não definida: nenhum técnico tem alcance de TI "
-                "(leitura e alteração só pelo vínculo direto)"
+                "(leitura e alteração só pelo vínculo direto; administração "
+                "global só pelo administrador)"
             )
         elif lidos.estado == "vazia":
-            logger.warning("SETORES_TI_IDS vazia: nenhum técnico tem alcance de TI")
+            logger.warning(
+                "SETORES_TI_IDS vazia: nenhum técnico tem alcance de TI "
+                "(administração global só pelo administrador)"
+            )
         elif lidos.estado == "invalida":
             logger.warning(
-                "SETORES_TI_IDS=%r não é uma lista de ids; nenhum técnico tem alcance de TI",
+                "SETORES_TI_IDS=%r não é uma lista de ids; nenhum técnico tem alcance "
+                "de TI (administração global só pelo administrador)",
                 self.SETORES_TI_IDS,
             )
         else:

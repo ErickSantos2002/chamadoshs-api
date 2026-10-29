@@ -137,3 +137,19 @@ def test_mudar_de_setor_muda_a_resposta(configurar):
     conta.setor_id = SETOR_QUALIDADE
     with pytest.raises(HTTPException):
         require_equipe_ti(current_user=conta)
+
+
+@pytest.mark.parametrize("valor", [None, "", "1,x"])
+def test_o_log_da_subida_diz_que_a_administracao_fica_com_o_administrador(monkeypatch, caplog, valor):
+    """O diagnóstico operacional da A7-6: quem olha o log sabe o que a TI perdeu."""
+    import logging
+
+    from app.core.config import Settings
+
+    if valor is None:
+        monkeypatch.delenv("SETORES_TI_IDS", raising=False)
+    else:
+        monkeypatch.setenv("SETORES_TI_IDS", valor)
+    with caplog.at_level(logging.WARNING, logger="app.core.config"):
+        Settings(_env_file=None)
+    assert any("administração global só pelo administrador" in r.getMessage() for r in caplog.records)
