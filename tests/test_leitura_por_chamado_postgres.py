@@ -2,11 +2,12 @@
 A política de leitura (API-5) em PostgreSQL real.
 
 Os mesmos testes de `test_politica_de_leitura.py` e das rotas
-(`test_leitura_por_chamado.py`), importados para cá e rodados com um `sessao`
+(`test_leitura_por_chamado.py`, `test_comentarios_por_chamado.py`), importados para cá e rodados com um `sessao`
 diferente: um PostgreSQL descartável criado pelo `schema_chamados.sql`. O
 SQLite já prova a regra; aqui o que se prova é o SQL dela no banco de
 produção — o OR do escopo, o IN do setor, a paginação sobre o conjunto
-filtrado, os arquivados e cancelados — e o trigger da versão na reatribuição.
+filtrado, os arquivados e cancelados, a chave estrangeira de verdade no
+comentário — e o trigger da versão na reatribuição.
 """
 
 import pytest
@@ -21,6 +22,13 @@ from test_politica_de_leitura import (  # noqa: F401
     TestCasosDeBorda,
     test_escopo_sql_e_predicado_dizem_o_mesmo,
     test_matriz_do_predicado,
+)
+from test_comentarios_por_chamado import (  # noqa: F401
+    TestComentar,
+    test_ex_responsavel_perde_os_comentarios,
+    test_leitura_dos_comentarios,
+    test_tecnico_da_qualidade_nao_le_interno_da_ti,
+    test_tecnico_ti_le_interno_da_qualidade,
 )
 from test_leitura_por_chamado import (  # noqa: F401
     TestContas,

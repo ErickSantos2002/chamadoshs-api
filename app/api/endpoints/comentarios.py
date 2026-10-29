@@ -5,9 +5,11 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from app.api.deps import get_current_user, get_db, is_admin, is_staff
+from app.models.chamado import Chamado
 from app.models.comentario import ComentarioChamado
 from app.models.usuario import Usuario
 from app.schemas.comentario import ComentarioCreate, ComentarioUpdate, ComentarioResponse
+from app.services.leitura_service import buscar_chamado_legivel, pode_ler_chamado
 
 router = APIRouter()
 
@@ -23,11 +25,13 @@ def listar_comentarios_chamado(
     db: Session = Depends(get_db),
 ):
     """
-    Lista os comentários de um chamado.
+    Lista os comentários de um chamado, se o usuário puder ler o chamado.
 
-    Comentários internos só aparecem para administrador e técnico — é para
-    isso que serve a marcação is_interno.
+    Chamado que não existe e chamado que a pessoa não lê dão o mesmo 404
+    (API-5). Comentários internos só aparecem para administrador e técnico —
+    é para isso que serve a marcação is_interno.
     """
+    buscar_chamado_legivel(db, chamado_id, current_user)
     query = db.query(ComentarioChamado).filter(
         ComentarioChamado.chamado_id == chamado_id
     )
@@ -47,10 +51,13 @@ def buscar_comentario(
     """
     Busca um comentário específico por ID.
 
-    Comentário interno só é devolvido para administrador e técnico.
+    O comentário segue a leitura do chamado dele: pedir pelo id do comentário
+    não contorna a regra (API-5). Comentário interno só é devolvido para
+    administrador e técnico.
     """
     comentario = db.query(ComentarioChamado).filter(ComentarioChamado.id == comentario_id).first()
-    if not comentario:
+    chamado = db.query(Chamado).filter(Chamado.id == comentario.chamado_id).first() if comentario else None
+    if chamado is None or not pode_ler_chamado(current_user, chamado):
         raise HTTPException(status_code=404, detail="Comentário não encontrado")
 
     if comentario.is_interno and not is_staff(current_user):
@@ -70,8 +77,10 @@ def criar_comentario(
     """
     Adiciona um novo comentário a um chamado.
 
-    O autor vem do token. Só administrador e técnico podem marcar o
-    comentário como interno.
+    O autor vem do token. O chamado tem de existir e o usuário tem de poder
+    lê-lo (API-5): antes qualquer conta comentava em qualquer chamado. Quem
+    não pode recebe o mesmo 404 de um chamado que não existe. Só
+    administrador e técnico podem marcar o comentário como interno.
     """
     # Só `is not None`: o aviso conta quem ainda manda o campo, não quem manda
     # o id de outra pessoa. Ver a nota em chamados.py.
@@ -81,6 +90,10 @@ def criar_comentario(
             comentario_data.usuario_id,
             current_user.id,
         )
+
+    # A leitura antes da regra do interno: um 403 aqui diria que o chamado
+    # existe a quem nem pode vê-lo.
+    buscar_chamado_legivel(db, comentario_data.chamado_id, current_user)
 
     if comentario_data.is_interno and not is_staff(current_user):
         raise HTTPException(
