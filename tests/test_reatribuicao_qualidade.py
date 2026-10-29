@@ -296,7 +296,10 @@ class TestQuemPodeReatribuir:
 
 
 class TestTiInalterada:
-    """O ramo da TI fica como era, inclusive no que a Qualidade passou a recusar."""
+    """
+    O ramo da TI fica como era, inclusive no que a Qualidade passou a recusar —
+    menos a equipe do responsável, que a API-6 (D9) passou a exigir.
+    """
 
     def test_atribuicao_dispara_o_webhook(self, cliente, dados, autenticar, webhook):
         resposta = _put(
@@ -335,22 +338,31 @@ class TestTiInalterada:
         assert _chamado(sessao, dados["chamado_id"]).tecnico_responsavel_id is None
         assert webhook == []
 
-    def test_atendente_da_qualidade_continua_atribuivel_na_ti(
+    def test_atendente_da_qualidade_nao_e_atribuivel_na_ti(
         self, cliente, chamado_qualidade, sessao, autenticar, webhook
     ):
-        # A regra da Qualidade não vaza para a TI: lá vale só a regra de antes.
+        # Era aceita: a TI tomava qualquer conta que não fosse de serviço. Desde
+        # a API-6 (D9) o responsável da TI é da equipe da TI — e a elegibilidade
+        # da Qualidade continua sem valer na TI, nos dois sentidos.
         d = chamado_qualidade
         resposta = _put(
             cliente, d["chamado_id"], {"tecnico_responsavel_id": d["atendente_id"]}, _tecnico(autenticar, d)
         )
 
-        assert resposta.status_code == 200
-        assert len(webhook) == 1
+        assert resposta.status_code == 400
+        assert resposta.json()["detail"] == "Técnico responsável não é da equipe da TI"
+        assert webhook == []
 
-    def test_conta_inativa_continua_aceita_na_ti(self, cliente, chamado_qualidade, sessao, autenticar, webhook):
-        # Comportamento de antes, preservado de propósito: corrigir a TI não é
-        # escopo desta etapa.
+    def test_conta_inativa_da_equipe_continua_aceita_na_ti(
+        self, cliente, chamado_qualidade, sessao, autenticar, webhook
+    ):
+        # Comportamento de antes, preservado de propósito: a D9 decide a
+        # equipe, não o `ativo` (pendente). A conta é posta na equipe da TI
+        # para que só o `ativo` esteja em jogo.
         d = chamado_qualidade
+        inativo = sessao.get(Usuario, d["inativo_id"])
+        inativo.role_id, inativo.setor_id = 2, 1
+        sessao.commit()
         resposta = _put(
             cliente, d["chamado_id"], {"tecnico_responsavel_id": d["inativo_id"]}, _tecnico(autenticar, d)
         )

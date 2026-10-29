@@ -110,6 +110,20 @@ def pode_alterar_como_equipe(usuario: Usuario, chamado: Chamado) -> bool:
     return chamado.setor_destino in setores_lidos_pelo_perfil(usuario)
 
 
+def integra_equipe_ti(usuario: Usuario) -> bool:
+    """
+    Se `usuario` pode ser responsável por chamado da TI (D9): perfil de
+    equipe — administrador ou técnico — num setor de `SETORES_TI_IDS`.
+
+    Pela conta a atribuir, e não por quem atribui: nem o administrador põe um
+    chamado da TI com quem não é da equipe. Ser técnico não basta, nem estar
+    fora da Qualidade: o técnico sem setor, o de outro setor e o da Qualidade
+    ficam de fora, e sem `SETORES_TI_IDS` ninguém é elegível. Conta de serviço
+    é recusada antes, com a mensagem de sempre (ver `chamados.py`).
+    """
+    return is_staff(usuario) and usuario.setor_id is not None and usuario.setor_id in settings.setores_ti_ids
+
+
 def escopo_de_leitura(query: Query, usuario: Usuario) -> Query:
     """
     `query` sobre `Chamado` restrita ao que `usuario` pode ler.

@@ -44,6 +44,7 @@ from app.services.leitura_service import (
     buscar_chamado_alteravel,
     buscar_chamado_legivel,
     escopo_de_leitura,
+    integra_equipe_ti,
     pode_alterar_como_equipe,
     pode_ler_chamado,
 )
@@ -102,9 +103,9 @@ def _avisar_usuario_id_depreciado(endpoint: str, usuario_id: Optional[int], atua
         )
 
 
-def _validar_tecnico_responsavel(db: Session, chamado_data: ChamadoUpdate) -> None:
+def _validar_tecnico_responsavel(db: Session, chamado: Chamado, chamado_data: ChamadoUpdate) -> None:
     """
-    Recusa atribuir um chamado a uma conta que não é pessoa.
+    Responsável de chamado da TI: uma pessoa, e da equipe da TI.
 
     O seletor do frontend já filtra contas de serviço, mas filtro de tela é
     convenção, não garantia: `tecnico_responsavel_id` é FK crua e a API aceita
@@ -117,6 +118,13 @@ def _validar_tecnico_responsavel(db: Session, chamado_data: ChamadoUpdate) -> No
     requisição nem toca.
 
     `None` explícito é desatribuição, e continua permitido.
+
+    Equipe da TI (API-6, D9): só na MUDANÇA de responsável, pelo mesmo motivo
+    de `_validar_responsavel_da_qualidade` — a edição completa do frontend
+    reenvia o responsável atual, e o chamado antigo com responsável de fora
+    da equipe continua editável. Ele não é trocado sozinho: fica com quem
+    está até alguém da equipe o reatribuir. A regra é da conta atribuída
+    (`integra_equipe_ti`), independente de quem atribui.
     """
     if "tecnico_responsavel_id" not in chamado_data.model_fields_set:
         return
@@ -138,6 +146,12 @@ def _validar_tecnico_responsavel(db: Session, chamado_data: ChamadoUpdate) -> No
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Não é possível atribuir um chamado a uma conta de serviço",
+        )
+
+    if tecnico_id != chamado.tecnico_responsavel_id and not integra_equipe_ti(tecnico):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Técnico responsável não é da equipe da TI",
         )
 
 
@@ -510,7 +524,7 @@ def atualizar_chamado(
     if eh_qualidade:
         _validar_responsavel_da_qualidade(db, chamado, chamado_data)
     else:
-        _validar_tecnico_responsavel(db, chamado_data)
+        _validar_tecnico_responsavel(db, chamado, chamado_data)
 
     # Armazenar status anterior e técnico anterior para histórico e webhook
     status_anterior = chamado.status
