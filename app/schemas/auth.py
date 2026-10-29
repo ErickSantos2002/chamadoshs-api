@@ -48,3 +48,11 @@ class UsuarioLogado(BaseModel):
     setor_id: Optional[int]
     role_id: int
     ativo: bool
+    # Se a conta é da equipe da TI (API-7, A7-5), calculado a cada pedido por
+    # `integra_equipe_ti` — a mesma regra de `require_equipe_ti`. Só de
+    # resposta: não está no cadastro, no banco nem no token.
+    #
+    # Diz de qual equipe a pessoa é, não o que ela pode: o administrador fora
+    # de um setor da TI recebe False e administra assim mesmo, pelo perfil. A
+    # tela combina os dois — perfil Administrador OU este campo.
+    integra_equipe_ti: bool

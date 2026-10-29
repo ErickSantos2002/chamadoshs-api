@@ -17,6 +17,7 @@ from app.schemas.auth import (
 )
 from app.core.security import verificar_senha, gerar_hash_senha, criar_token_acesso
 from app.core.config import settings
+from app.services.leitura_service import integra_equipe_ti
 from app.services.evento_conta_service import (
     instantaneo,
     registrar_alteracoes,
@@ -233,7 +234,8 @@ def obter_usuario_logado(current_user: Usuario = Depends(get_current_user)):
         nome=current_user.nome,
         setor_id=current_user.setor_id,
         role_id=current_user.role_id,
-        ativo=current_user.ativo
+        ativo=current_user.ativo,
+        integra_equipe_ti=integra_equipe_ti(current_user),
     )
 
 
