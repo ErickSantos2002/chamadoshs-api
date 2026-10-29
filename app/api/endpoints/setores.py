@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.api.deps import get_db, require_staff
+from app.api.deps import get_db, require_admin, require_equipe_ti
 from app.models.setor import Setor
 from app.models.usuario import Usuario
 from app.schemas.setor import SetorCreate, SetorUpdate, SetorResponse
@@ -138,11 +138,11 @@ def buscar_setor(setor_id: int, db: Session = Depends(get_db)):
 @router.post("/", response_model=SetorResponse, status_code=status.HTTP_201_CREATED)
 def criar_setor(
     setor_data: SetorCreate,
-    autor: Usuario = Depends(require_staff),
+    autor: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     """
-    Cria um novo setor. Restrito a administrador ou técnico.
+    Cria um novo setor. Restrito a administrador ou técnico da TI (API-7, D13).
     """
     setor = Setor(**setor_data.model_dump())
     db.add(setor)
@@ -160,11 +160,11 @@ def criar_setor(
 def atualizar_setor(
     setor_id: int,
     setor_data: SetorUpdate,
-    autor: Usuario = Depends(require_staff),
+    autor: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     """
-    Atualiza um setor existente. Restrito a administrador ou técnico.
+    Atualiza um setor existente. Restrito a administrador ou técnico da TI (API-7, D13).
 
     É por aqui que o frontend edita setor hoje, e por aqui que ele desativa
     quando manda `ativo: false` — daí a trava e a gravação de trilha estarem
@@ -203,11 +203,11 @@ def atualizar_setor(
 @router.patch("/{setor_id}/desativar", response_model=SetorResponse)
 def desativar_setor(
     setor_id: int,
-    autor: Usuario = Depends(require_staff),
+    autor: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     """
-    Desativa um setor. Restrito a administrador ou técnico.
+    Desativa um setor. Restrito a administrador ou técnico da TI (API-7, D13).
 
     Diz no verbo o que sempre fez no corpo: o `DELETE` desta rota nunca apagou
     setor nenhum. Fechar essa distância é o que permite, no passo seguinte, o
@@ -224,11 +224,11 @@ def desativar_setor(
 @router.patch("/{setor_id}/reativar", response_model=SetorResponse)
 def reativar_setor(
     setor_id: int,
-    autor: Usuario = Depends(require_staff),
+    autor: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     """
-    Reativa um setor. Restrito a administrador ou técnico.
+    Reativa um setor. Restrito a administrador ou técnico da TI (API-7, D13).
 
     Sem trava: a de desativação existe para não deixar usuários ativos presos a
     um setor que sumiu do formulário, e reativar é justamente o que desfaz esse
@@ -253,11 +253,12 @@ def reativar_setor(
 @router.delete("/{setor_id}", status_code=status.HTTP_204_NO_CONTENT)
 def deletar_setor(
     setor_id: int,
-    autor: Usuario = Depends(require_staff),
+    autor: Usuario = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
-    **Exclui** um setor. Restrito a administrador ou técnico.
+    **Exclui** um setor. Restrito a administrador (API-7, A7-1): até a API-6
+    o técnico de qualquer setor também excluía.
 
     Apaga de verdade, como em categorias. Até a versão anterior esta rota
     desativava, e a mudança foi feita depois de o frontend migrar para
