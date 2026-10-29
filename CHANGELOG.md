@@ -12,6 +12,82 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Segurança — leitura por chamado (API-5, correção do O-1)
+- **Chamado passa a ser lido só por quem tem relação com ele ou leitura pelo
+  perfil.** Até aqui a leitura só exigia token: qualquer conta ativa lia o
+  detalhe, a listagem inteira — arquivados e cancelados inclusive, até 500
+  por página —, o histórico e os comentários públicos de qualquer chamado, e
+  comentava em qualquer um. O "só os meus chamados" do perfil Usuário era o
+  filtro que o frontend escolhia mandar. Achado O-1 da homologação da
+  API-4c, anterior à API-4; auditoria de 29/10/2026.
+
+  A regra mora em `app/services/leitura_service.py`, em duas formas que os
+  testes comparam chamado a chamado — `pode_ler_chamado` para um chamado
+  carregado e `escopo_de_leitura` como filtro SQL da listagem. Decisões
+  D1–D7, aprovadas em 29/10/2026:
+
+  | Quem | TI | Qualidade |
+  |---|---|---|
+  | Administrador | lê | lê |
+  | Técnico da TI (D1) | lê | lê |
+  | Técnico da Qualidade (D2) | só pelo vínculo | lê |
+  | Solicitante | o próprio | o próprio |
+  | Responsável atual | o atribuído | o atribuído |
+  | Ex-responsável sem outro vínculo (D4) | não | não |
+  | Mesmo setor do solicitante (D5) | não | não |
+  | Qualquer outro autenticado | não | não |
+
+  Técnico da Qualidade é o de perfil Técnico no setor de
+  `SETOR_QUALIDADE_ID`; técnico de qualquer outro setor é da TI; técnico sem
+  setor só lê pelo vínculo. Sem `SETOR_QUALIDADE_ID`, como em produção hoje,
+  todo técnico com setor continua lendo tudo.
+
+  | Rota | Antes | Agora |
+  |---|---|---|
+  | `GET /chamados/{id}` | qualquer autenticado | pela regra; senão 404 |
+  | `GET /chamados/` | tudo, filtrado pelo que o cliente pedisse | só o permitido; os filtros estreitam, a paginação corta o permitido |
+  | `GET /historico/chamado/{id}` | qualquer autenticado; id inexistente dava `[]` | pela regra; senão 404, inexistente também |
+  | `GET /historico/{id}` | qualquer autenticado | segue o chamado do registro |
+  | `GET /comentarios/chamado/{id}` | qualquer autenticado (internos só equipe) | pela regra; senão 404; internos como antes |
+  | `GET /comentarios/{id}` | qualquer autenticado (internos só equipe) | segue o chamado do comentário; internos como antes |
+  | `POST /comentarios/` | qualquer autenticado, em qualquer chamado, até inexistente | só em chamado que existe e que a pessoa lê; senão 404 |
+
+  **A recusa é o 404 de um chamado que não existe (D6)**, com o mesmo corpo:
+  tentar ids não diz quais existem, e a recusa não traz versão nem dado do
+  chamado.
+
+  **O que não muda:** as escritas (PUT, atendimento, cancelar, arquivar,
+  desarquivar, avaliar, excluir), a versão e a concorrência da API-4, quem lê
+  e cria comentário interno (só equipe; a responsável de perfil Usuário
+  continua sem, D3), editar e excluir comentário, o SLA, o formato das
+  respostas. **`GET /usuarios/` e `GET /usuarios/{id}` continuam abertos
+  (D7)**: o frontend monta os nomes da tela com eles em todos os perfis; a
+  revisão do diretório fica para uma etapa própria.
+
+  **Frontend:** nenhuma mudança necessária. Os pedidos que o FE-4 faz para o
+  perfil Usuário (`solicitante_id` = ele; `tecnico_id` = ele com
+  `setor_destino=QUALIDADE`) devolvem o mesmo de antes, e a equipe da TI
+  segue vendo os dois setores. Quem perde a atribuição e relê o chamado
+  aberto na tela recebe 404, que o FE-4 mostra como erro genérico de
+  carregamento — aceitável, mas pede mensagem própria num FE-5.
+
+  **Riscos que ficam**, fora do escopo de leitura:
+  - As escritas por perfil devolvem o chamado no corpo. O técnico da
+    Qualidade continua com `require_staff` — PUT, cancelar, arquivar e
+    desarquivar — também em chamado da TI, e a resposta traz o chamado que
+    ele não lê. Restringir é mudar regra de escrita: decisão pendente.
+  - Quem deixou de ler um chamado ainda edita e exclui os próprios
+    comentários nele pelo id, e a resposta da edição traz o comentário.
+  - Técnico sem setor deixa de ler os chamados que não tem vínculo. Ver
+    "Ação necessária no deploy".
+  - O diretório de usuários segue aberto (D7).
+
+  Testes: `test_politica_de_leitura.py` (predicado × escopo SQL),
+  `test_leitura_por_chamado.py` e `test_comentarios_por_chamado.py` (matriz
+  perfil × chamado × rota, listagem com filtros e paginação, ex-responsável
+  pela reatribuição real), e `test_leitura_por_chamado_postgres.py`, que roda
+  os três em PostgreSQL real.
+
 ### Alterado — permissões
 - **Técnico passa a administrar setores, categorias e prazos de SLA**, e a
   auditar o cadastro que administra. Antes tudo isso exigia administrador.
@@ -879,6 +955,31 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   nele). Mas, com o FE-4 no ar, o atendimento da 4a/3 recusa `versao_esperada`
   como campo a mais (**422**): voltar a API exige voltar o frontend junto, ou
   o atendimento da Qualidade para. PUT e marcas da 4a/3 ignoram o campo.
+
+- **API-5 (leitura por chamado): sem migration, sem variável nova, sem
+  frontend novo.** Usa só colunas que já existem. Pode subir com o frontend
+  em produção ou com o FE-4; na ordem da Qualidade, entra junto da imagem da
+  API-4: migrations → API (4c + 5) → FE-4 → só então `SETOR_QUALIDADE_ID`.
+  **Não ligar a Qualidade sem a API-5**: sem ela, todo chamado da Qualidade
+  seria legível por qualquer conta.
+
+  Antes de subir, conferir quem perde leitura — técnico ativo sem setor:
+
+  ```sql
+  SELECT u.id, u.nome FROM usuarios u JOIN roles r ON r.id = u.role_id
+  WHERE r.nome = 'Tecnico' AND u.ativo AND u.setor_id IS NULL;
+  ```
+
+  Se vier alguém que deva continuar vendo os chamados da TI, pôr o setor
+  certo no cadastro antes do deploy.
+
+  **Rollback:** voltar a imagem anterior da API, a que estava no ar. Nada no banco a desfazer:
+  migrations, trigger de versão e dados ficam como estão, e o frontend não
+  precisa voltar. **Mas o rollback reabre o O-1**: a leitura volta a ser de
+  qualquer autenticado. É rollback funcional, não de confidencialidade — e,
+  com `SETOR_QUALIDADE_ID` ligado, expõe também a Qualidade. Voltar a API-5
+  com a Qualidade ligada pede desligar a Qualidade junto, ou aceitar o risco
+  por escrito.
 
 - **Antes de ligar a Qualidade: concorrência em PostgreSQL.** A API-4b já
   prova em PostgreSQL local, um caso por rota, que a escrita da Qualidade

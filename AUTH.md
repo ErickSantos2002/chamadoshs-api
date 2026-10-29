@@ -255,10 +255,58 @@ excluir setores e categorias; alterar prazos de SLA; excluir chamado;
 criar, editar e excluir tarefas recorrentes; criar e enxergar comentário
 interno.
 
-**Qualquer usuário autenticado:** leitura em geral; abrir chamado, para a TI
-ou para a Qualidade; listar os atendentes da Qualidade
-(`GET /chamados/atendentes-qualidade`, só `id` e `nome`); cancelar o próprio
-chamado; comentar; registrar execução de tarefa recorrente.
+**Qualquer usuário autenticado:** leitura dos cadastros (usuários, setores,
+categorias, prazos de SLA); abrir chamado, para a TI ou para a Qualidade;
+listar os atendentes da Qualidade (`GET /chamados/atendentes-qualidade`, só
+`id` e `nome`); cancelar o próprio chamado; registrar execução de tarefa
+recorrente. A leitura de **chamado** não é mais geral: ver abaixo.
+
+**Leitura de chamado (API-5):** decidida chamado a chamado por
+`app/services/leitura_service.py`, a mesma regra para o detalhe, a listagem,
+o histórico e os comentários. Decisões D1–D7, aprovadas em 29/10/2026:
+
+| Quem | Chamado da TI | Chamado da Qualidade |
+|---|---|---|
+| Administrador | lê | lê |
+| Técnico da TI (perfil Técnico, setor que não é o da Qualidade) — D1 | lê | lê |
+| Técnico da Qualidade (perfil Técnico no setor de `SETOR_QUALIDADE_ID`) — D2 | só pelo vínculo | lê |
+| Solicitante | o próprio | o próprio |
+| Responsável atual | o atribuído | o atribuído |
+| Ex-responsável sem outro vínculo — D4 | não | não |
+| Mesmo setor do solicitante, sem vínculo — D5 | não | não |
+| Qualquer outro autenticado | não | não |
+
+- **Vínculo** é ser o solicitante ou o responsável **atual**. Não há leitura
+  por histórico de atribuição: quem deixa de atender deixa de ler, salvo se
+  for o solicitante ou tiver leitura por perfil (D4).
+- **Técnico sem setor** não lê por perfil, só pelo vínculo: sem setor não dá
+  para dizer de qual equipe ele é, e a regra fecha. Perfil fora dos três
+  também fica só com o vínculo.
+- **Sem `SETOR_QUALIDADE_ID`** (Qualidade desligada, como em produção hoje),
+  ninguém é técnico da Qualidade, e todo técnico com setor lê os dois setores.
+- **Recusa é 404, igual à de um chamado que não existe (D6)** — mesmo status,
+  mesmo corpo (`"Chamado não encontrado"`; `"Histórico não encontrado"` e
+  `"Comentário não encontrado"` nas rotas por id). Tentar ids não diz quais
+  existem, e a recusa não traz versão nem nenhum dado do chamado.
+- **Listagem:** o escopo entra antes dos filtros e da paginação.
+  `solicitante_id`, `tecnico_id`, `setor_destino`, `incluir_arquivados` e
+  `incluir_cancelados` só estreitam o que a pessoa já pode ler.
+- **Histórico e comentários** seguem o chamado, também pelo id do registro.
+  Por cima vale a regra de sempre do comentário interno: só Administrador e
+  Técnico o leem e o criam, inclusive a responsável de perfil Usuário não
+  (D3). O técnico da Qualidade não chega aos internos da TI porque não lê o
+  chamado.
+- **Comentar** exige que o chamado exista e que a pessoa possa lê-lo. Antes
+  qualquer conta comentava em qualquer chamado; nenhum perfil ganhou
+  comentário que não tinha. Editar e excluir comentário seguem do autor ou do
+  administrador, sem mudança.
+- **Só leitura.** As escritas seguem as regras desta seção: ler a Qualidade
+  não dá ao técnico da TI o atendimento dela, e a regra de leitura não
+  restringe o que `require_staff` já permite escrever.
+- **Fora desta regra, de propósito (D7):** `GET /usuarios/` e
+  `GET /usuarios/{id}` continuam abertos a qualquer autenticado — o frontend
+  monta os nomes da tela com eles, em todos os perfis. A revisão do diretório
+  é trabalho à parte.
 
 **Pelo chamado, não pelo perfil:** `PATCH /chamados/{id}/atendimento` — mudar
 o status e registrar a solução de um chamado da Qualidade. Só o responsável

@@ -190,6 +190,9 @@ ChamadosHS/
 
 ## 🔐 Perfis de Acesso
 
+Resumo. A regra completa, rota a rota, está em [AUTH.md](AUTH.md) ("Restrições
+por perfil" e "Leitura de chamado").
+
 ### Administrador
 - Acesso total ao sistema
 - Gerenciar usuários, setores e categorias
@@ -197,16 +200,19 @@ ChamadosHS/
 - Gerar relatórios completos
 
 ### Técnico
-- Visualizar e gerenciar chamados atribuídos
-- Comentar e resolver chamados
-- Visualizar histórico completo
+- Técnico da TI: visualizar os chamados da TI e da Qualidade
+- Técnico da Qualidade (setor de `SETOR_QUALIDADE_ID`): visualizar os
+  chamados da Qualidade, e da TI só os que atende
+- Gerenciar chamados, comentar (inclusive comentário interno) e resolver
 - Gerar relatórios da equipe
 
 ### Usuário
 - Abrir novos chamados
-- Visualizar seus próprios chamados
-- Comentar em seus chamados
+- Visualizar e comentar os chamados que abriu ou que atende hoje (atendimento
+  da Qualidade)
 - Avaliar atendimento
+
+Quem não pode ver um chamado recebe o mesmo 404 de um chamado que não existe.
 
 ## 📊 Fluxo de Chamados
 
