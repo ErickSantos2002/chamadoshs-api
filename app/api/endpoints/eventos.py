@@ -4,7 +4,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, is_admin, require_staff
+from app.api.deps import get_db, is_admin, require_equipe_ti
 from app.models.usuario import Usuario
 from app.schemas.evento import EventoResponse
 from app.services import trilha_service
@@ -37,12 +37,13 @@ def listar_eventos(
     # além disso pede filtro (`de`/`ate`/`ator_id`), não página 200.
     skip: int = Query(0, ge=0, le=10_000),
     limit: int = Query(100, ge=1, le=500),
-    autor: Usuario = Depends(require_staff),
+    autor: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     """
     Trilha de auditoria dos cadastros, do mais recente para o mais antigo.
-    Restrito a administrador (aplicado no router, em main.py).
+    Restrito a administrador ou técnico da TI (API-7, A7-4). Até a API-6
+    bastava ser técnico, de qualquer setor.
 
     Junta usuários e setores num formato só: a pergunta da auditoria é "quem
     fez o quê, com o quê, e quando", e ela não muda conforme a tabela. O campo
@@ -53,7 +54,7 @@ def listar_eventos(
     12 até o fim, não até a meia-noite dele — que é o que devolveria uma lista
     vazia para quem filtra o dia corrente.
 
-    **Técnico vê apenas eventos de SETOR.** Ele passou a administrar setores,
+    **Técnico da TI vê apenas eventos de SETOR.** Ele administra setores,
     categorias e SLA, e audita o que administra — mas eventos de conta dizem
     quem redefiniu a senha de quem, quem promoveu quem a administrador e quem
     desativou quem, e isso fica com o administrador.

@@ -1,10 +1,13 @@
 """
 A administração global por perfil e configuração (API-7, D13).
 
-Até a API-6, setores, categorias e SLA usavam `require_staff`: técnico de
+Até a API-6, setores, categorias, SLA, tarefas e eventos usavam `require_staff`: técnico de
 qualquer setor os administrava — o da Qualidade, o de outro setor, o sem
 setor. Agora é `require_equipe_ti` (administrador ou técnico da TI), e a
 exclusão de setor é só do administrador (A7-1).
+
+Tarefas recorrentes (as sete rotas) e a trilha de setor seguem a mesma
+regra (A7-4): também a leitura.
 
 A matriz é perfil × configuração × rota. Em cada caso, quem pode recebe o
 status de sempre e a escrita acontece; quem não pode recebe o 403 de sempre
@@ -66,6 +69,18 @@ OPERACOES = [
     ("categoria_editar", "PUT", "/categorias/1", {"nome": "Hardware e periféricos"}, 200, "ti"),
     ("categoria_excluir", "DELETE", f"/categorias/{CATEGORIA_SEM_USO}", None, 204, "ti"),
     ("sla_editar", "PUT", "/sla-configs/Alta", {"minutos_resposta": 15, "minutos_resolucao": 120}, 200, "ti"),
+    # As sete de tarefas recorrentes, leitura incluída (A7-4).
+    ("tarefa_listar", "GET", "/tarefas-recorrentes/", None, 200, "ti"),
+    ("tarefa_detalhe", "GET", "/tarefas-recorrentes/200", None, 200, "ti"),
+    ("tarefa_criar", "POST", "/tarefas-recorrentes/", {
+        "titulo": "Conferir nobreak", "tipo_recorrencia": "mensal", "dia_mes": 5, "proxima_data": "2026-11-05",
+    }, 201, "ti"),
+    ("tarefa_editar", "PUT", "/tarefas-recorrentes/200", {"titulo": "Backup semanal completo"}, 200, "ti"),
+    ("tarefa_excluir", "DELETE", "/tarefas-recorrentes/200", None, 204, "ti"),
+    ("tarefa_execucoes", "GET", "/tarefas-recorrentes/200/execucoes", None, 200, "ti"),
+    ("tarefa_realizar", "POST", "/tarefas-recorrentes/200/realizar", {"observacao": "Feito no teste"}, 200, "ti"),
+    # A trilha de setor (A7-4).
+    ("eventos_listar", "GET", "/eventos/", None, 200, "ti"),
 ]
 LEITURAS = {nome for nome, metodo, *_ in OPERACOES if metodo == "GET"}
 
@@ -277,3 +292,72 @@ class TestRegrasDeSempre:
         resposta = cliente.delete(f"{API}/setores/{setor}", headers=como("tecnico_qualidade"))
         assert (resposta.status_code, resposta.json()) == (403, SO_ADMINISTRADOR)
         assert _foto(sessao) == antes
+
+
+class TestTarefas:
+    def test_quem_realizou_continua_vindo_do_token(self, cliente, sessao, como, configurar, administracao):
+        configurar("valida")
+        resposta = cliente.post(
+            f"{API}/tarefas-recorrentes/200/realizar", headers=como("tecnico_ti"),
+            json={"usuario_id": administracao["admin"], "observacao": "Feito"},
+        )
+        assert resposta.status_code == 200, resposta.text
+        sessao.expire_all()
+        execucao = sessao.query(TarefaRecorrenteExecucao).one()
+        assert execucao.usuario_id == administracao["tecnico_ti"]
+
+    def test_recusa_nao_avanca_a_proxima_data(self, cliente, sessao, como, configurar):
+        configurar("valida")
+        sessao.expire_all()
+        antes = sessao.get(TarefaRecorrente, 200).proxima_data
+        assert cliente.post(
+            f"{API}/tarefas-recorrentes/200/realizar", headers=como("tecnico_qualidade"), json={},
+        ).status_code == 403
+        sessao.expire_all()
+        assert sessao.get(TarefaRecorrente, 200).proxima_data == antes
+        assert sessao.query(TarefaRecorrenteExecucao).count() == 0
+
+    def test_tarefa_inexistente_continua_404_para_a_ti(self, cliente, como, configurar):
+        configurar("valida")
+        assert cliente.get(f"{API}/tarefas-recorrentes/999", headers=como("tecnico_ti")).status_code == 404
+
+    def test_tarefa_inexistente_e_403_para_quem_nao_e_da_ti(self, cliente, como, configurar):
+        """A trava vem antes da busca: o 403 não diz se a tarefa existe."""
+        configurar("valida")
+        for tarefa in (200, 999):
+            resposta = cliente.get(f"{API}/tarefas-recorrentes/{tarefa}", headers=como("tecnico_qualidade"))
+            assert (resposta.status_code, resposta.json()) == (403, NEGADO)
+
+
+class TestEventos:
+    """A trava nova é de entrada; o recorte por alvo continua o de antes."""
+
+    @pytest.fixture
+    def trilha(self, cliente, como, configurar, administracao):
+        """Um evento de setor e um de conta, gravados pelas rotas de verdade."""
+        configurar("valida")
+        assert cliente.post(f"{API}/setores/", headers=como("admin"), json={"nome": "Logística"}).status_code == 201
+        assert cliente.put(
+            f"{API}/usuarios/{administracao['solicitante']}", headers=como("admin"), json={"nome": "usuario.renomeado"},
+        ).status_code == 200
+
+    def _tipos(self, resposta):
+        assert resposta.status_code == 200, resposta.text
+        return {e["alvo_tipo"] for e in resposta.json()}
+
+    def test_administrador_ve_os_dois(self, cliente, como, trilha):
+        assert self._tipos(cliente.get(f"{API}/eventos/", headers=como("admin"))) == {"usuario", "setor"}
+
+    def test_tecnico_da_ti_ve_so_setor(self, cliente, como, trilha):
+        assert self._tipos(cliente.get(f"{API}/eventos/", headers=como("tecnico_ti"))) == {"setor"}
+
+    def test_tecnico_da_ti_continua_sem_eventos_de_conta(self, cliente, como, trilha):
+        resposta = cliente.get(f"{API}/eventos/?alvo=usuario", headers=como("tecnico_ti"))
+        assert resposta.status_code == 403
+        assert resposta.json() == {"detail": "Requer perfil: Administrador para ver eventos de conta"}
+
+    @pytest.mark.parametrize("alvo", ["", "?alvo=setor", "?alvo=usuario"])
+    @pytest.mark.parametrize("quem", ["tecnico_qualidade", "tecnico_outro_setor", "tecnico_sem_setor", "solicitante"])
+    def test_fora_da_ti_nenhum_alvo(self, cliente, como, trilha, quem, alvo):
+        resposta = cliente.get(f"{API}/eventos/{alvo}", headers=como(quem))
+        assert (resposta.status_code, resposta.json()) == (403, NEGADO)

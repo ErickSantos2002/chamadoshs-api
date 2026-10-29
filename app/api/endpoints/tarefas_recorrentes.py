@@ -6,7 +6,7 @@ from datetime import timedelta
 
 import logging
 
-from app.api.deps import get_db, require_staff
+from app.api.deps import get_db, require_equipe_ti
 from app.models.tarefa_recorrente import TarefaRecorrente, TarefaRecorrenteExecucao
 from app.models.usuario import Usuario
 from app.schemas.tarefa_recorrente import (
@@ -63,12 +63,14 @@ def listar_tarefas(
     apenas_atrasadas: bool = False,
     skip: int = Query(0, ge=0),
     limit: int = Query(200, ge=1),
-    _staff: Usuario = Depends(require_staff),
+    _equipe_ti: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     """
     Lista tarefas recorrentes (ordenadas pela próxima data). Restrito a
-    administrador ou técnico.
+    administrador ou técnico da TI (API-7, A7-4) — as sete rotas do módulo.
+    Até a API-6 bastava ser técnico, de qualquer setor: a rotina não tem
+    setor, e o perfil sozinho não dizia que a pessoa era da TI.
 
     O módulo inteiro é da equipe de TI, e a leitura acompanha a escrita: rotina
     interna não é informação de solicitante. Estava aberta a qualquer
@@ -88,7 +90,7 @@ def listar_tarefas(
 @router.get("/{tarefa_id}", response_model=TarefaRecorrenteResponse)
 def buscar_tarefa(
     tarefa_id: int,
-    _staff: Usuario = Depends(require_staff),
+    _equipe_ti: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     tarefa = db.query(TarefaRecorrente).filter(TarefaRecorrente.id == tarefa_id).first()
@@ -100,7 +102,7 @@ def buscar_tarefa(
 @router.post("/", response_model=TarefaRecorrenteResponse, status_code=status.HTTP_201_CREATED)
 def criar_tarefa(
     dados: TarefaRecorrenteCreate,
-    _staff: Usuario = Depends(require_staff),
+    _equipe_ti: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     payload = dados.model_dump()
@@ -125,7 +127,7 @@ def criar_tarefa(
 def atualizar_tarefa(
     tarefa_id: int,
     dados: TarefaRecorrenteUpdate,
-    _staff: Usuario = Depends(require_staff),
+    _equipe_ti: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     tarefa = db.query(TarefaRecorrente).filter(TarefaRecorrente.id == tarefa_id).first()
@@ -141,7 +143,7 @@ def atualizar_tarefa(
 @router.delete("/{tarefa_id}", status_code=status.HTTP_204_NO_CONTENT)
 def deletar_tarefa(
     tarefa_id: int,
-    _staff: Usuario = Depends(require_staff),
+    _equipe_ti: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     """Exclui a tarefa e, em cascata, todo o histórico de execuções.
@@ -160,11 +162,12 @@ def deletar_tarefa(
 @router.get("/{tarefa_id}/execucoes", response_model=List[ExecucaoResponse])
 def listar_execucoes(
     tarefa_id: int,
-    _staff: Usuario = Depends(require_staff),
+    _equipe_ti: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     """
-    Histórico de execuções de uma rotina. Restrito a administrador ou técnico.
+    Histórico de execuções de uma rotina. Restrito a administrador ou técnico
+    da TI.
 
     Diz quem fez o quê e quando dentro da equipe — é o registro de trabalho dos
     técnicos, e não tem leitor legítimo fora dela.
@@ -188,17 +191,17 @@ def listar_execucoes(
 def realizar_tarefa(
     tarefa_id: int,
     dados: RealizarTarefaRequest,
-    current_user: Usuario = Depends(require_staff),
+    current_user: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     """
     Registra uma execução e avança a próxima data para a próxima ocorrência.
-    Restrito a administrador ou técnico.
+    Restrito a administrador ou técnico da TI.
 
     Quem realizou vem do token: aceitar do corpo permitia registrar a
     execução em nome de outra pessoa.
 
-    **Por que `require_staff` e não `get_current_user`**, que era o que estava
+    **Por que uma trava de equipe e não `get_current_user`**, que era o que estava
     aqui: rotina recorrente é trabalho da equipe de TI, e esta rota não apenas
     registra quem fez — ela **avança `proxima_data`**. Com qualquer autenticado
     podendo chamá-la, um usuário comum marcava "Backup semanal" como realizado
@@ -206,7 +209,9 @@ def realizar_tarefa(
     acontecido e sem nada parecer errado na tela.
 
     O restante do CRUD de rotina já exigia staff; era esta a porta que ficou
-    aberta, e ela é a única do módulo que muda o estado do agendamento.
+    aberta, e ela é a única do módulo que muda o estado do agendamento. Na
+    API-7 a trava virou `require_equipe_ti`: o técnico da Qualidade marcava a
+    rotina da TI como feita do mesmo jeito.
     """
     # Só `is not None`: o aviso conta quem ainda manda o campo, não quem manda
     # o id de outra pessoa. Ver a nota em chamados.py.

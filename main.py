@@ -145,10 +145,10 @@ app.include_router(
 # ordem de declaração para não ser engolida pelo path int.
 #
 # A restrição de perfil NÃO fica aqui, e isso é exceção deliberada ao padrão
-# desta tela: administrador vê a trilha inteira e técnico vê apenas eventos de
-# setor, que é o cadastro que ele administra. Uma dependency de router só sabe
-# dizer "entra ou não entra" — a distinção depende do parâmetro `alvo` da
-# requisição, então mora no handler, junto com a explicação.
+# desta tela: administrador vê a trilha inteira e técnico da TI vê apenas
+# eventos de setor, que é o cadastro que ele administra. Uma dependency de
+# router só sabe dizer "entra ou não entra" — a distinção depende do parâmetro
+# `alvo` da requisição, então mora no handler, junto com a explicação.
 app.include_router(
     eventos.router,
     prefix="/api/v1/eventos",
