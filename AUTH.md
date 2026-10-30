@@ -282,6 +282,7 @@ banco fica como estava. Sem `SETORES_TI_IDS` válida, só o administrador.
 | `PUT /sla-configs/{prioridade}` | sim | sim | 403 | 403 |
 | `/tarefas-recorrentes` (todas) | sim | sim | 403 | 403 |
 | `GET /eventos/` | todos os alvos | só setor | 403 | 403 |
+| `GET /chamados/responsaveis-ti` (API-9) | sim | sim | 403 | 403 |
 
 A Qualidade não tem permissão administrativa global (A7-3). Alteração de SLA
 e de categoria não tem trilha própria (risco residual, A7-7).
@@ -391,11 +392,16 @@ equipe); 422 do corpo; 404 da leitura; 403 da equipe ou da regra da rota;
 428/409 de versão; 400/409 de estado e de transição. Nada é gravado numa
 recusa — nem histórico, nem webhook, nem versão.
 
-**Responsável de chamado da TI (D9):** só conta da equipe da TI — perfil de
-equipe (administrador ou técnico) num setor de `SETORES_TI_IDS` —, pela conta
-atribuída e não por quem atribui; senão 400 `"Técnico responsável não é da
-equipe da TI"`. Vale na mudança: reenviar o responsável atual passa, e o
-chamado antigo com responsável de fora não é trocado sozinho.
+**Responsável de chamado da TI (D9, API-9):** só conta da equipe da TI —
+perfil de equipe (administrador ou técnico) num setor de `SETORES_TI_IDS` —,
+ativa e que não seja conta de serviço, pela conta atribuída e não por quem
+atribui; senão 400 `"Técnico responsável não é da equipe da TI"`,
+`"Técnico responsável está inativo"` (API-9) ou `"Não é possível atribuir um
+chamado a uma conta de serviço"`. Vale na mudança: reenviar o responsável
+atual passa, e o chamado antigo com responsável de fora ou inativo não é
+trocado sozinho. A regra mora em `responsavel_ti_service`, e
+`GET /chamados/responsaveis-ti` (`require_equipe_ti`, só `id` e `nome`)
+devolve exatamente quem ela aceita: é a lista que o seletor deve oferecer.
 
 **Pelo chamado, não pelo perfil:** `PATCH /chamados/{id}/atendimento` — mudar
 o status e registrar a solução de um chamado da Qualidade. Só o responsável

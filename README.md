@@ -202,7 +202,9 @@ por perfil" e "Leitura de chamado").
 
 ### Técnico
 - Técnico da TI (setor listado em `SETORES_TI_IDS`): visualizar e gerenciar
-  os chamados da TI e da Qualidade, e ser responsável por chamado da TI;
+  os chamados da TI e da Qualidade, e ser responsável por chamado da TI
+  enquanto estiver ativo (API-9; a lista de quem pode receber chamado da TI
+  é `GET /chamados/responsaveis-ti`);
   administrar setores (sem excluir), categorias, prazos de SLA e tarefas
   recorrentes, e ver a trilha de setores
 - Técnico da Qualidade (setor de `SETOR_QUALIDADE_ID`): visualizar e

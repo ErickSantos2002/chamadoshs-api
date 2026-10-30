@@ -12,6 +12,139 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Adicionado e corrigido — responsáveis elegíveis da TI (API-9, F5-1)
+- **Decisão F5-1 (auditoria de compatibilidade FE-5 × API-8):** criar uma
+  rota com os responsáveis elegíveis da TI e impedir novas atribuições a
+  usuários inativos. A auditoria achou duas lacunas: o frontend não tinha
+  como saber quem a API aceita como responsável de chamado da TI — montava o
+  seletor com `GET /usuarios/` e um filtro de perfil, e oferecia técnico de
+  outro setor, administrador de fora da TI e conta inativa, que o PUT
+  recusava com 400 —, e a validação do responsável da TI não olhava
+  `ativo`: o técnico desativado num setor da TI ainda recebia chamado novo,
+  que ninguém atenderia, porque a conta inativa nem se autentica.
+
+  **Regra única** (`app/services/responsavel_ti_service.py`), como a
+  `qualidade_service` é para a Qualidade: a validação da mudança de
+  responsável no `PUT` e a lista nova passam pela mesma função,
+  `pode_ser_novo_responsavel`. Elegível para ser **novo** responsável de
+  chamado da TI é a conta que:
+  1. existe;
+  2. não é conta de serviço;
+  3. `integra_equipe_ti` diz ser da TI (API-6, D9) — perfil Administrador
+     ou Técnico num setor de `SETORES_TI_IDS`, nunca o da Qualidade;
+  4. está ativa (**novo**; `ativo` NULL conta como inativo).
+
+  A regra é da conta atribuída, não de quem atribui. O administrador **não**
+  entra na lista pelo poder administrativo: só se estiver num setor da TI,
+  como a API-6 já exigia na atribuição. Nada foi ampliado.
+
+  **`GET /api/v1/chamados/responsaveis-ti`** — `[{"id": int, "nome": str}]`,
+  por nome e, no empate, por id (o `nome` é único no banco; o id é só
+  defesa). Nenhum outro campo: nem senha, nem hash, nem setor, perfil ou
+  estado. Nenhum parâmetro do cliente entra na lista — `?setor_id=`,
+  `?ativo=false` e afins são ignorados. Autorização `require_equipe_ti`:
+  administrador (de qualquer setor) e técnico da TI, os únicos que o `PUT`
+  deixa reatribuir chamado da TI; técnico da Qualidade, de outro setor, sem
+  setor e usuário comum recebem 403 `"Requer perfil: Administrador ou
+  Técnico da TI"`; sem token, 401; conta inativa, o 403 `"Usuário inativo"`
+  de sempre. Declarada antes de `/{chamado_id}`, como
+  `/atendentes-qualidade`. A consulta estreita aos setores da TI no SQL,
+  traz a role no mesmo SELECT (sem N+1) e deixa a decisão para a regra.
+
+  | `SETORES_TI_IDS` | Lista | Quem pede |
+  |---|---|---|
+  | válida (`"1"`, `"1,1"`, `"1,999"`) | os elegíveis dos setores válidos | administrador e técnico da TI |
+  | conflitando com a Qualidade (`"1,2"`) | só a do setor 1; a Qualidade nunca vale como TI | idem |
+  | ausente, vazia, inválida, só a Qualidade, só setor inexistente | **vazia**, com aviso no log | só o administrador |
+
+  Sem lista válida não há fallback para "todos os técnicos" nem id
+  inventado: a lista vazia diz que ninguém pode receber chamado da TI, e é
+  exatamente o que o `PUT` faria.
+
+  **Inativo recusado na mudança de responsável:** 400 `"Técnico
+  responsável está inativo"`, no lugar das outras recusas de responsável —
+  depois do 404 de alcance e da conferência de versão (409 da TI quando
+  `versao_esperada` vem e está velha; a ordem da API-6 não muda), antes de
+  qualquer gravação. Nada é gravado numa recusa: nem o responsável, nem os
+  outros campos do mesmo corpo, nem histórico, nem versão, nem webhook. A
+  checagem vem depois da de equipe: o inativo de fora da TI continua
+  recebendo `"Técnico responsável não é da equipe da TI"`, e nenhuma
+  mensagem que já existia mudou.
+
+  **Caminhos de atribuição conferidos:** o `PUT /chamados/{id}` é o único
+  que muda o responsável de chamado da TI — reatribuição, autoatribuição e
+  atribuição pela edição completa passam todos por ele. A abertura da TI
+  continua **ignorando** `tecnico_responsavel_id` no corpo (o chamado nasce
+  sem responsável). A conta inativa não se autoatribui: não se autentica. A
+  Qualidade tem a regra dela, que já recusava o inativo (`eh_elegivel`), e
+  não mudou. O atendimento (`PATCH .../atendimento`) não muda responsável.
+
+  **Responsável antigo preservado (D9):** a regra vale na **mudança**.
+  Omitir o campo, ou reenviar o responsável atual (a edição completa do
+  frontend faz isso), não revalida nada: o chamado antigo atribuído a quem
+  hoje está inativo ou fora da TI fica com essa pessoa e continua editável —
+  status, prioridade, solução. Desatribuir (`null`) continua permitido.
+  Nada troca o responsável sozinho, e nada no banco é alterado. Mas essa
+  pessoa não aparece na lista, e escolhê-la de novo depois de trocar é
+  mudança, e é recusada. (Exceção que já existia: conta de serviço é
+  recusada mesmo como responsável atual.)
+
+  **O FE-5 precisa:**
+  - Chamar `GET /chamados/responsaveis-ti` só para quem pode reatribuir —
+    `role === 'Administrador' || integra_equipe_ti === true` —; para os
+    outros a rota dá 403, e o interceptor global mostraria o toast.
+  - Montar o seletor da TI com essa lista (página e modal), no lugar de
+    `usuariosService.listarTodos({ ativo: true })` filtrado por
+    `podeSerResponsavel` (`ChamadosContext.carregarTecnicos`,
+    `ChamadoModal.atribuiveis`).
+  - Lista vazia: nenhuma opção além de "Sem atribuição"; com o
+    administrador, avisar que não há responsável elegível configurado.
+  - Responsável atual fora da lista: mostrar `"Nome (fora da equipe)"` como
+    valor atual, só informativo — a opção não autoriza nada, e a API recusa
+    se ela for escolhida de novo depois de trocada. O nome tem de vir de
+    outro lugar: a lista não o traz, e `usuarios` carregado com
+    `ativo: true` também não traz o inativo (hoje a tela mostra "Não
+    encontrado"). Corrigir o `Seletor`, que mostra a primeira opção quando
+    o valor não está na lista.
+  - 400 do responsável (`"…está inativo"`, `"…não é da equipe da TI"`,
+    `"…conta de serviço"`): mostrar o `detail`, manter o que foi digitado,
+    e recarregar a lista — ela pode ter mudado.
+  - Recarregar a lista ao abrir a edição, não só uma vez por sessão: a
+    mudança de setor, de perfil ou de `ativo` vale no próximo pedido, sem
+    cache.
+  - Contra uma API sem a rota (API-8 ou anterior), `/chamados/responsaveis-ti`
+    cai em `/chamados/{chamado_id}` e responde **422**. Não deve acontecer
+    na implantação coordenada (F5-4: a API antes do front); se acontecer,
+    tratar como lista indisponível — sem voltar ao filtro de perfil, que
+    oferece quem a API recusa.
+
+  **Riscos residuais:**
+  - Conta de serviço com perfil Técnico num setor da TI pede a lista, como
+    administra na API-7 — e não aparece nela.
+  - A lista mostra nomes de toda a equipe da TI a quem já pode atribuir;
+    `GET /usuarios/` segue aberto a qualquer autenticado (D7, A7-8),
+    então nada novo é exposto.
+  - Chamados antigos atribuídos a inativos continuam com eles até alguém
+    reatribuir; a API-9 não os lista nem os altera.
+
+  Testes: `test_elegibilidade_responsavel_ti.py` (a regra, 14 tipos de
+  conta × 9 configurações × ativo/inativo/NULL, igual a `integra_equipe_ti`
+  mais o `ativo`, e as mensagens), `test_responsavel_ti_inativo.py`
+  (recusa sem escrita por quem atribui, ordem 404/409/400, chamado antigo,
+  desatribuição, abertura, Qualidade), `test_responsaveis_ti_lista.py`
+  (quem pede, por configuração; conteúdo, campos, ordem, parâmetros
+  ignorados, número de consultas, rota estática, sonda D-6, OpenAPI, e a
+  lista igual ao que o `PUT` aceita para toda conta em toda configuração) e
+  `test_responsaveis_ti_postgres.py`, que roda os de rota em PostgreSQL
+  real. Um teste anterior mudou de expectativa, de propósito:
+  `test_reatribuicao_qualidade.py::TestTiInalterada::test_conta_inativa_da_equipe_continua_aceita_na_ti`
+  travava o aceite do inativo na TI ("pendente" da D9) e virou
+  `test_conta_inativa_da_equipe_e_recusada_na_ti`.
+
+  Validação local: 7.815 testes únicos, igual à coleta — 4.944 em SQLite e
+  2.871 em PostgreSQL 15.19 descartável, serial, em lotes conferidos pelo
+  junit, sem skip. Inclui a matriz de concorrência T1–T14.
+
 ### Segurança — comentário interno só para administrador e TI (API-8)
 - **Comentário interno deixa de ser de qualquer perfil Técnico.** O
   inventário da API-7 mostrou que os comentários decidiam o interno por
@@ -1363,6 +1496,22 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   pelo perfil ou pelo vínculo. Com a Qualidade ligada, avaliar desligar
   `SETOR_QUALIDADE_ID` **antes** de voltar a imagem, ou aceitar o risco por
   escrito.
+
+- **API-9 (responsáveis da TI): sem migration, sem variável nova — depende
+  da `SETORES_TI_IDS` da API-6 configurada e conferida, e vem antes do
+  FE-5 (F5-4).** Sem a lista, a rota responde vazia e nenhum técnico a
+  pede: só o administrador. É o comportamento seguro, não um defeito.
+
+  1. Os passos da API-6, da API-7 e da API-8, acima.
+  2. Depois de subir: um técnico da TI recebe a lista; um técnico da
+     Qualidade recebe 403; atribuir chamado da TI a uma conta desativada dá
+     400.
+
+  **Rollback:** voltar a imagem da API-8; nada no banco a desfazer. Mas o
+  rollback **remove a rota** e volta a **aceitar técnico inativo** como
+  novo responsável. Com o FE-5 no ar, que monta o seletor da TI com a
+  rota, o rollback tem de ser coordenado: voltar o front junto, ou aceitar
+  o seletor sem opções (a rota passa a responder 422).
 
 - **Antes de ligar a Qualidade: concorrência em PostgreSQL.** A API-4b já
   prova em PostgreSQL local, um caso por rota, que a escrita da Qualidade
