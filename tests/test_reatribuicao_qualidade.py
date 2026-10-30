@@ -353,11 +353,12 @@ class TestTiInalterada:
         assert resposta.json()["detail"] == "Técnico responsável não é da equipe da TI"
         assert webhook == []
 
-    def test_conta_inativa_da_equipe_continua_aceita_na_ti(
+    def test_conta_inativa_da_equipe_e_recusada_na_ti(
         self, cliente, chamado_qualidade, sessao, autenticar, webhook
     ):
-        # Comportamento de antes, preservado de propósito: a D9 decide a
-        # equipe, não o `ativo` (pendente). A conta é posta na equipe da TI
+        # Até a API-8 era aceita, de propósito: a D9 decidia a equipe, e o
+        # `ativo` ficou pendente. A API-9 (F5-1) fechou o pendente — ver
+        # `test_responsavel_ti_inativo.py`. A conta é posta na equipe da TI
         # para que só o `ativo` esteja em jogo.
         d = chamado_qualidade
         inativo = sessao.get(Usuario, d["inativo_id"])
@@ -367,8 +368,9 @@ class TestTiInalterada:
             cliente, d["chamado_id"], {"tecnico_responsavel_id": d["inativo_id"]}, _tecnico(autenticar, d)
         )
 
-        assert resposta.status_code == 200
-        assert _chamado(sessao, d["chamado_id"]).tecnico_responsavel_id == d["inativo_id"]
+        assert (resposta.status_code, resposta.json()) == (400, {"detail": "Técnico responsável está inativo"})
+        assert _chamado(sessao, d["chamado_id"]).tecnico_responsavel_id is None
+        assert webhook == []
 
     def test_conta_de_servico_continua_com_a_mensagem_da_ti(self, cliente, chamado_qualidade, autenticar, webhook):
         d = chamado_qualidade
