@@ -44,7 +44,6 @@ from app.services.leitura_service import (
     buscar_chamado_alteravel,
     buscar_chamado_legivel,
     escopo_de_leitura,
-    integra_equipe_ti,
     pode_alterar_como_equipe,
     pode_ler_chamado,
 )
@@ -58,6 +57,7 @@ from app.services.qualidade_service import (
     listar_atendentes,
     verificar_atendimento,
 )
+from app.services.responsavel_ti_service import CONTA_DE_SERVICO, motivo_de_recusa
 from app.services.sla_service import calcular_sla
 from app.services.versao_service import conferir_versao
 from app.services.webhook_service import enviar_webhook_tecnico
@@ -123,8 +123,8 @@ def _validar_tecnico_responsavel(db: Session, chamado: Chamado, chamado_data: Ch
     de `_validar_responsavel_da_qualidade` — a edição completa do frontend
     reenvia o responsável atual, e o chamado antigo com responsável de fora
     da equipe continua editável. Ele não é trocado sozinho: fica com quem
-    está até alguém da equipe o reatribuir. A regra é da conta atribuída
-    (`integra_equipe_ti`), independente de quem atribui.
+    está até alguém da equipe o reatribuir. A regra é da conta atribuída,
+    independente de quem atribui, e mora em `responsavel_ti_service`.
     """
     if "tecnico_responsavel_id" not in chamado_data.model_fields_set:
         return
@@ -142,17 +142,15 @@ def _validar_tecnico_responsavel(db: Session, chamado: Chamado, chamado_data: Ch
             detail="Técnico responsável não encontrado",
         )
 
+    # Conta de serviço é recusada também quando é o responsável atual, como
+    # sempre foi: só o resto da regra espera a mudança.
     if tecnico.conta_de_servico:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Não é possível atribuir um chamado a uma conta de serviço",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=CONTA_DE_SERVICO)
 
-    if tecnico_id != chamado.tecnico_responsavel_id and not integra_equipe_ti(tecnico):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Técnico responsável não é da equipe da TI",
-        )
+    if tecnico_id != chamado.tecnico_responsavel_id:
+        motivo = motivo_de_recusa(tecnico)
+        if motivo is not None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=motivo)
 
 
 def _validar_responsavel_da_qualidade(db: Session, chamado: Chamado, chamado_data: ChamadoUpdate) -> None:
