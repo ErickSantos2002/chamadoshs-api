@@ -13,6 +13,7 @@ from app.api.deps import (
     get_db,
     is_admin,
     require_admin,
+    require_equipe_ti,
     require_staff,
 )
 from app.models.chamado import Chamado
@@ -28,6 +29,7 @@ from app.schemas.chamado import (
     ChamadoMarca,
     ChamadoResponse,
     ChamadoUpdate,
+    ResponsavelTI,
     SetorDestinoEnum,
     StatusEnum,
 )
@@ -57,7 +59,7 @@ from app.services.qualidade_service import (
     listar_atendentes,
     verificar_atendimento,
 )
-from app.services.responsavel_ti_service import CONTA_DE_SERVICO, motivo_de_recusa
+from app.services.responsavel_ti_service import CONTA_DE_SERVICO, listar_responsaveis, motivo_de_recusa
 from app.services.sla_service import calcular_sla
 from app.services.versao_service import conferir_versao
 from app.services.webhook_service import enviar_webhook_tecnico
@@ -287,8 +289,9 @@ def listar_chamados(
 QUALIDADE_INDISPONIVEL = "Abertura de chamados para a Qualidade não está disponível neste ambiente"
 
 
-# Antes de `/{chamado_id}`: o FastAPI casa as rotas na ordem em que foram
-# declaradas, e depois dela "atendentes-qualidade" seria lido como id.
+# Antes de `/{chamado_id}`, como `/responsaveis-ti` abaixo: o FastAPI casa
+# as rotas na ordem em que foram declaradas, e depois dela
+# "atendentes-qualidade" seria lido como id.
 @router.get("/atendentes-qualidade", response_model=List[AtendenteQualidade])
 def listar_atendentes_qualidade(db: Session = Depends(get_db)):
     """
@@ -302,6 +305,27 @@ def listar_atendentes_qualidade(db: Session = Depends(get_db)):
         return listar_atendentes(db)
     except QualidadeIndisponivel:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=QUALIDADE_INDISPONIVEL)
+
+
+@router.get("/responsaveis-ti", response_model=List[ResponsavelTI])
+def listar_responsaveis_ti(
+    current_user: Usuario = Depends(require_equipe_ti),
+    db: Session = Depends(get_db),
+):
+    """
+    Quem pode ser escolhido como novo responsável de um chamado da TI (API-9).
+
+    Para o seletor de quem reatribui chamado da TI — o administrador e o
+    técnico da TI, os únicos que o PUT deixa reatribuir —, por isso
+    `require_equipe_ti`: o técnico da Qualidade, o de outro setor, o sem
+    setor e o usuário comum recebem 403. Devolve só id e nome, e a regra é a
+    mesma que o PUT aplica na mudança de responsável, então o que aparece
+    aqui é aceito lá. Nenhum parâmetro do cliente entra na lista.
+
+    O responsável atual de um chamado antigo pode não estar aqui (inativo,
+    fora da equipe): continua no chamado, mas não é opção nova.
+    """
+    return listar_responsaveis(db)
 
 
 @router.get("/{chamado_id}", response_model=ChamadoResponse)

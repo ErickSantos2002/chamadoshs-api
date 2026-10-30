@@ -213,6 +213,15 @@ class AtendenteQualidade(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ResponsavelTI(BaseModel):
+    """Opção do seletor de responsável da TI (API-9): só o necessário para escolher."""
+
+    id: int
+    nome: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ChamadoUpdate(BaseModel):
     """
     Edição de chamado. Restrito a administrador ou técnico.
