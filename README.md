@@ -210,7 +210,8 @@ por perfil" e "Leitura de chamado").
 - Técnico de outro setor, ou sem setor: só os chamados que abriu ou atende
 - Fora da TI, nenhum técnico administra cadastros, SLA ou rotinas — nem o da
   Qualidade (API-7)
-- Comentar (inclusive comentário interno) e resolver
+- Comentar e resolver; comentário interno, só o técnico da TI (API-8) — o
+  da Qualidade, o de outro setor e o sem setor não o veem nem o criam
 - Gerar relatórios da equipe
 
 ### Usuário

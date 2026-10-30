@@ -287,8 +287,24 @@ A Qualidade não tem permissão administrativa global (A7-3). Alteração de SLA
 e de categoria não tem trilha própria (risco residual, A7-7).
 
 **Administrador ou Técnico:** atualizar, arquivar e desarquivar chamados —
-só os do alcance do perfil (API-6, ver "Escrita de chamado pela equipe");
-criar e enxergar comentário interno nos chamados que lê.
+só os do alcance do perfil (API-6, ver "Escrita de chamado pela equipe").
+
+**Administrador ou Técnico da TI, nos chamados que lê**
+(`pode_acessar_comentario_interno`, API-8): ler e criar comentário interno.
+É a mesma regra de `require_equipe_ti`: administrador pelo perfil, técnico
+só num setor de `SETORES_TI_IDS`. O técnico da Qualidade, o de outro setor e
+o sem setor não leem nem criam interno — nem como solicitante, nem como
+responsável, nem nos chamados da Qualidade —, e sem `SETORES_TI_IDS` válida
+só o administrador. As duas coisas são exigidas: o técnico da TI não vê o
+interno de um chamado que não lê.
+
+| Comentário interno | Lê o chamado e pode o interno | Lê o chamado e não pode | Não lê o chamado |
+|---|---|---|---|
+| Listar (`GET /comentarios/chamado/{id}`) | públicos e internos | só os públicos | 404 |
+| Buscar por id | 200 | 404, igual a id inexistente | 404 |
+| Criar | 201 | 403, nada gravado | 404 |
+| Editar ou excluir | autoria de sempre | 404, mesmo sendo o autor | 404 |
+| Marcar `is_interno: true` na edição | autoria de sempre | 403 | 404 |
 
 **Qualquer usuário autenticado:** leitura dos cadastros (usuários, setores,
 categorias, prazos de SLA); abrir chamado, para a TI ou para a Qualidade;
@@ -336,14 +352,15 @@ o histórico e os comentários. Decisões D1–D7, aprovadas em 29/10/2026:
   `solicitante_id`, `tecnico_id`, `setor_destino`, `incluir_arquivados` e
   `incluir_cancelados` só estreitam o que a pessoa já pode ler.
 - **Histórico e comentários** seguem o chamado, também pelo id do registro.
-  Por cima vale a regra de sempre do comentário interno: só Administrador e
-  Técnico o leem e o criam, inclusive a responsável de perfil Usuário não
-  (D3). O técnico da Qualidade não chega aos internos da TI porque não lê o
-  chamado.
+  Por cima vale a regra do comentário interno: só Administrador e Técnico da
+  TI o leem e o criam (API-8; até a API-7, todo perfil Técnico), e a
+  responsável de perfil Usuário não (D3). Ver "Administrador ou Técnico da
+  TI, nos chamados que lê", acima.
 - **Comentar** exige que o chamado exista e que a pessoa possa lê-lo. Antes
   qualquer conta comentava em qualquer chamado; nenhum perfil ganhou
   comentário que não tinha. **Editar e excluir** (API-6, D11) exigem ver o
-  comentário hoje — o chamado legível e, se interno, perfil de equipe —, e
+  comentário hoje — o chamado legível e, se interno, poder o interno
+  (API-8) —, e
   depois ser o autor ou administrador. Quem não vê recebe o 404 de um id que
   não existe, antes do 403 de autoria.
 - **A leitura não dá escrita.** Ler a Qualidade não dá ao técnico da TI o

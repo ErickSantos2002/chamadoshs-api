@@ -12,6 +12,93 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Segurança — comentário interno só para administrador e TI (API-8)
+- **Comentário interno deixa de ser de qualquer perfil Técnico.** O
+  inventário da API-7 mostrou que os comentários decidiam o interno por
+  `is_staff`: o técnico da Qualidade, o de outro setor e o sem setor viam e
+  criavam comentário interno em todo chamado que liam — pelo perfil (o da
+  Qualidade, nos chamados da Qualidade) ou pelo vínculo (o que abriram ou
+  atendem). Regra aprovada: **só administrador e técnico da TI leem e criam
+  comentário interno, e só nos chamados que leem.**
+
+  **Nova função `pode_acessar_comentario_interno`**
+  (`app/services/leitura_service.py`): o administrador, pelo perfil, em
+  qualquer setor; e o técnico que `integra_equipe_ti` diz ser da TI — a
+  mesma regra da API-6 e da `require_equipe_ti` da API-7, sem classificação
+  paralela, sem configuração nova, sem campo no banco ou no token. Sem
+  `SETORES_TI_IDS` válida, só o administrador; nenhum fallback para
+  qualquer técnico.
+
+  **Duas autorizações, as duas exigidas:** ler o chamado (API-5/API-6) e
+  poder o interno. Ler o chamado vem antes, e a recusa dele é sempre o 404 de
+  um chamado ou comentário que não existe (D6/D12).
+
+  | Rota | Quem lê o chamado e pode o interno | Quem lê o chamado e não pode | Quem não lê o chamado |
+  |---|---|---|---|
+  | `GET /comentarios/chamado/{id}` | públicos e internos | só os públicos (200; lista vazia se só houver internos) | 404 |
+  | `GET /comentarios/{id}` | 200 | interno: 404 igual ao de id inexistente | 404 |
+  | `POST /comentarios/` interno | 201 | **403** `"Apenas administrador ou técnico da TI pode criar comentário interno"`, nada gravado | 404, antes de olhar o tipo |
+  | `POST /comentarios/` público | 201 | 201 (inalterado) | 404 |
+  | `PUT` / `DELETE /comentarios/{id}` de interno | autoria de sempre (autor ou administrador) | **404, mesmo sendo o autor** | 404 |
+  | `PUT` marcando `is_interno: true` | autoria de sempre | **403** `"Apenas administrador ou técnico da TI pode marcar comentário como interno"` | 404 |
+
+  Quem não pode o interno também não o torna público pela edição: nem chega
+  a ele (404). O administrador mantém os poderes de sempre — edita e exclui
+  o comentário alheio, interno incluído — e o técnico da TI não ganha
+  autoria sobre o interno alheio (403 de sempre). As mensagens de 403 do
+  interno mudaram de "administrador ou técnico" para "administrador ou
+  técnico da TI"; status e formato (`{"detail"}`) são os de antes.
+
+  **Defeito corrigido no caminho:** `PUT` com `"is_interno": null` gravava
+  NULL (a coluna aceita) e respondia 500, e a busca por id tratava um NULL
+  como público. Agora o `null` vale como não enviado, e a busca trata NULL
+  como interno, como a listagem já fazia (`is_interno IS false`). Nenhum
+  dado é migrado.
+
+  Nenhuma outra resposta carrega texto de comentário: detalhe, listagem e
+  histórico de chamado, eventos, webhook e diagnóstico foram conferidos, e
+  um teste procura o texto dos internos nelas para cada perfil sem
+  permissão. Comentários existentes — públicos e internos — ficam como
+  estão: nenhum é apagado, convertido ou migrado.
+
+  **Compatibilidade com o FE-4:** nenhum contrato quebra. O FE-4 só cria
+  comentário público (`is_interno: false`), não edita nem exclui
+  comentário, e mostra a lista que a API devolve, sem distinguir o
+  interno. Com a API-8, o técnico de fora da TI simplesmente deixa de
+  receber os internos. Até a API-8 a tela dele os mostrava misturados aos
+  públicos, sem marca.
+
+  **O FE-5 precisa:** oferecer a opção de comentário interno só a
+  `role === 'Administrador' || integra_equipe_ti` (o mesmo critério da
+  administração); não oferecê-la ao técnico da Qualidade nem ao usuário;
+  marcar visualmente o comentário interno para quem o recebe; tratar o 403
+  do interno sem perder o texto digitado; e, se um dia editar ou excluir
+  comentário, tratar o 404 como "não está mais disponível". A API continua
+  sendo quem decide.
+
+  **Riscos residuais:**
+  - Conta de serviço com perfil Técnico num setor da TI vê e cria interno,
+    como administra na API-7: a regra é a do perfil e do setor.
+  - Quem já leu um interno antes da API-8 pode ter guardado o texto; a
+    API-8 fecha o acesso daqui em diante e não apaga o que já foi visto.
+  - A lista de comentários não tem `ORDER BY` (inalterado): a ordem é a que
+    o banco devolve.
+  - Alteração de SLA e de categoria segue sem trilha (A7-7), e o diretório
+    de usuários segue aberto (D7, A7-8).
+
+  Testes: `test_permissao_comentario_interno.py` (a função, 13 tipos de
+  conta × 8 configurações, igual a `integra_equipe_ti` e a
+  `require_equipe_ti`), `test_comentarios_internos.py` (configuração ×
+  perfil × chamado na leitura, criação por configuração, perfil e tipo,
+  recusa sem escrita e sem requisição externa, vazamento por outras
+  respostas, casos nomeados), `test_comentarios_internos_edicao.py` (edição
+  e exclusão do próprio comentário por configuração, perfil, tipo e ação;
+  mudança de visibilidade; o NULL; os poderes de sempre) e
+  `test_comentarios_internos_postgres.py`, que roda os de rota em
+  PostgreSQL real. `leitura_cenario.EQUIPE` virou `VEEM_INTERNO` (o técnico
+  da Qualidade saiu) e a mensagem esperada do 403 de marcar interno mudou
+  em `test_comentarios_edicao.py`.
+
 ### Segurança — administração global da equipe da TI (API-7, D13)
 - **Setores, categorias, SLA, tarefas recorrentes e a trilha de setor
   deixam de ser de qualquer técnico.** A auditoria D13 (29/10/2026) mostrou
@@ -78,7 +165,7 @@ cada versão lista o que precisa ser feito além de subir a imagem.
     achado no inventário): o técnico de outro setor, sem setor ou da
     Qualidade que lê um chamado pelo vínculo — que o abriu ou o atende — vê
     e cria comentário interno nele, porque "ser da equipe" ali é `is_staff`.
-    Não é rota administrativa global; fica para decisão.
+    Não é rota administrativa global. **Fechado na API-8 (acima).**
   - O diretório de usuários (`GET /usuarios`) segue aberto a qualquer conta
     autenticada (D7, A7-8).
 
@@ -1259,6 +1346,23 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   setores, categorias, SLA e rotinas e a ler a trilha de setor. Com a
   Qualidade ligada, avaliar desligar `SETOR_QUALIDADE_ID` **antes** de
   voltar a imagem, ou aceitar o risco por escrito.
+
+- **API-8 (comentário interno): sem migration, sem variável nova, sem
+  frontend novo — mas depende da `SETORES_TI_IDS` da API-6 configurada e
+  conferida.** Sem ela, **nenhum técnico vê nem cria comentário interno**:
+  só o administrador. É o comportamento seguro, não um defeito.
+
+  1. Os passos da API-6 e da API-7, acima.
+  2. Depois de subir: um técnico da TI vê os internos de um chamado que lê;
+     um técnico da Qualidade, no mesmo chamado da Qualidade, só os públicos.
+
+  **Rollback:** voltar a imagem da API-7; nada no banco a desfazer, e o
+  frontend não precisa voltar. **Mas o rollback não é seguro para a
+  confidencialidade:** volta a deixar o técnico da Qualidade, o de outro
+  setor e o sem setor ver e criar comentário interno nos chamados que leem
+  pelo perfil ou pelo vínculo. Com a Qualidade ligada, avaliar desligar
+  `SETOR_QUALIDADE_ID` **antes** de voltar a imagem, ou aceitar o risco por
+  escrito.
 
 - **Antes de ligar a Qualidade: concorrência em PostgreSQL.** A API-4b já
   prova em PostgreSQL local, um caso por rota, que a escrita da Qualidade
