@@ -7,7 +7,8 @@ conta por conta e configuração por configuração. O PUT que a usa é coberto 
 `test_responsavel_ti.py`.
 
 A regra que se prova: elegível é quem `integra_equipe_ti` diz ser da TI, sem
-ser conta de serviço — e cada recusa tem a mensagem que a API-6 já dava.
+ser conta de serviço e ativo (API-9) — e cada recusa que já existia mantém a
+mensagem que a API-6 dava.
 """
 
 import pytest
@@ -18,6 +19,7 @@ from app.services.leitura_service import integra_equipe_ti
 from app.services.responsavel_ti_service import (
     CONTA_DE_SERVICO,
     FORA_DA_EQUIPE,
+    INATIVO,
     motivo_de_recusa,
     pode_ser_novo_responsavel,
 )
@@ -83,33 +85,65 @@ def configurar(monkeypatch):
     return _configurar
 
 
+# `ativo` como o banco pode devolver: a coluna aceita NULL.
+ESTADOS = {"ativo": True, "inativo": False, "ativo_nulo": None}
+
+
+@pytest.mark.parametrize("estado", ESTADOS)
 @pytest.mark.parametrize("configuracao", CONFIGURACOES)
 @pytest.mark.parametrize("nome", CONTAS)
-def test_matriz(configurar, nome, configuracao):
+def test_matriz(configurar, nome, configuracao, estado):
     configurar(configuracao)
     _, elegiveis = CONFIGURACOES[configuracao]
-    assert pode_ser_novo_responsavel(conta(nome)) is (nome in elegiveis)
+    esperado = nome in elegiveis and estado == "ativo"
+    assert pode_ser_novo_responsavel(conta(nome, ativo=ESTADOS[estado])) is esperado
 
 
+@pytest.mark.parametrize("estado", ESTADOS)
 @pytest.mark.parametrize("configuracao", CONFIGURACOES)
 @pytest.mark.parametrize("nome", CONTAS)
-def test_e_a_regra_da_api_6(configurar, nome, configuracao):
-    """Nada além do que já valia: ser da TI pela API-6 e não ser conta de serviço."""
+def test_e_a_regra_da_api_6_mais_o_ativo(configurar, nome, configuracao, estado):
+    """Nada além do que já valia — ser da TI pela API-6, não ser conta de serviço — e estar ativo."""
     configurar(configuracao)
-    c = conta(nome)
-    assert pode_ser_novo_responsavel(c) is (integra_equipe_ti(c) and not c.conta_de_servico)
+    c = conta(nome, ativo=ESTADOS[estado])
+    assert pode_ser_novo_responsavel(c) is (integra_equipe_ti(c) and not c.conta_de_servico and c.ativo is True)
+
+
+@pytest.mark.parametrize("estado", ["inativo", "ativo_nulo"])
+@pytest.mark.parametrize("nome", sorted(CONTAS))
+def test_motivo_de_cada_recusa(configurar, nome, estado):
+    configurar("valida")
+    if CONTAS[nome][2]:
+        esperado = CONTA_DE_SERVICO
+    elif nome not in ELEGIVEIS_NA_TI:
+        esperado = FORA_DA_EQUIPE  # o texto de antes, também para o inativo
+    else:
+        esperado = INATIVO
+    assert motivo_de_recusa(conta(nome, ativo=ESTADOS[estado])) == esperado
 
 
 @pytest.mark.parametrize("nome", sorted(set(CONTAS) - ELEGIVEIS_NA_TI))
-def test_motivo_de_cada_recusa(configurar, nome):
+def test_conta_ativa_recebe_a_recusa_de_antes(configurar, nome):
     configurar("valida")
     esperado = CONTA_DE_SERVICO if CONTAS[nome][2] else FORA_DA_EQUIPE
     assert motivo_de_recusa(conta(nome)) == esperado
 
 
-def test_as_mensagens_sao_as_da_api_6():
+def test_as_mensagens():
     assert CONTA_DE_SERVICO == "Não é possível atribuir um chamado a uma conta de serviço"
     assert FORA_DA_EQUIPE == "Técnico responsável não é da equipe da TI"
+    assert INATIVO == "Técnico responsável está inativo"
+
+
+@pytest.mark.parametrize("configuracao", ["valida", "com_duplicidade", "conflitante_com_qualidade"])
+def test_desativar_tira_da_regra_e_reativar_devolve(configurar, configuracao):
+    configurar(configuracao)
+    c = conta("tecnico_ti")
+    assert pode_ser_novo_responsavel(c)
+    c.ativo = False
+    assert motivo_de_recusa(c) == INATIVO
+    c.ativo = True
+    assert pode_ser_novo_responsavel(c)
 
 
 @pytest.mark.parametrize("configuracao", ["ausente", "vazia", "invalida", "so_qualidade"])
