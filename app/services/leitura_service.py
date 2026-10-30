@@ -124,6 +124,22 @@ def integra_equipe_ti(usuario: Usuario) -> bool:
     return is_staff(usuario) and usuario.setor_id is not None and usuario.setor_id in settings.setores_ti_ids
 
 
+def pode_acessar_comentario_interno(usuario: Usuario) -> bool:
+    """
+    Se `usuario` pode ver e escrever comentário interno (API-8): o
+    administrador, pelo perfil, e o técnico que `integra_equipe_ti` diz ser
+    da TI.
+
+    Até a API-7 bastava o perfil de equipe (`is_staff`): o técnico da
+    Qualidade, o de outro setor e o sem setor viam e criavam interno em todo
+    chamado que liam pelo vínculo. A pergunta aqui é só a do perfil; ler o
+    chamado é outra, e as duas são exigidas — o técnico da TI não vê o
+    interno de um chamado que não lê. Sem `SETORES_TI_IDS` válida, só o
+    administrador.
+    """
+    return is_admin(usuario) or integra_equipe_ti(usuario)
+
+
 def escopo_de_leitura(query: Query, usuario: Usuario) -> Query:
     """
     `query` sobre `Chamado` restrita ao que `usuario` pode ler.
