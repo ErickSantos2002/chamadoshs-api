@@ -67,11 +67,10 @@ LEITURA_ESPERADA = {
     "conta_de_servico": set(),
 }
 
-# Quem vê comentário interno nos chamados que lê: a regra de sempre (perfil
-# de equipe), que a API-5 não muda.
-EQUIPE = {
-    "admin", "admin_da_qualidade", "tecnico_ti", "tecnico_qualidade", "tecnico_sem_setor", "tecnico_outro_setor",
-}
+# Quem vê comentário interno nos chamados que lê (API-8): administrador e
+# técnico da TI. Até a API-7 era todo perfil de equipe — o técnico da
+# Qualidade via o interno dos chamados da Qualidade e dos que atende.
+VEEM_INTERNO = {"admin", "admin_da_qualidade", "tecnico_ti"}
 
 ROLE_DE = {
     "admin": "Administrador",

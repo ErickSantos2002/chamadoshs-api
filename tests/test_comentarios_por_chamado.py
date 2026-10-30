@@ -3,8 +3,9 @@ Comentários por chamado (API-5, correção do O-1).
 
 Ler os comentários de um chamado — pela lista ou pelo id de um deles — exige
 poder ler o chamado, e a recusa é o mesmo 404 de quando ele não existe (D6).
-Por cima disso continua a regra de sempre: comentário interno só para o
-perfil de equipe, e a responsável de perfil Usuário não o vê (D3).
+Por cima disso, comentário interno só para administrador e técnico da TI
+(API-8; até a API-7, todo perfil de equipe), e a responsável de perfil
+Usuário não o vê (D3).
 
 Comentar também exige poder ler o chamado, e o chamado tem de existir. Isso
 só fecha: antes qualquer conta comentava em qualquer chamado, e nenhum perfil
@@ -16,9 +17,9 @@ import pytest
 from app.models.comentario import ComentarioChamado
 from leitura_cenario import (  # noqa: F401
     CHAMADOS,
-    EQUIPE,
     EX_RESPONSAVEL,
     LEITURA_ESPERADA,
+    VEEM_INTERNO,
     cenario_de_leitura,
     comentario_interno,
     comentario_publico,
@@ -36,7 +37,7 @@ def test_leitura_dos_comentarios(cliente, como, quem, nome):
 
     if nome in LEITURA_ESPERADA[quem]:
         esperados = {comentario_publico(cid)}
-        if quem in EQUIPE:
+        if quem in VEEM_INTERNO:
             esperados.add(comentario_interno(cid))
             assert interno.status_code == 200
         else:
@@ -61,7 +62,7 @@ def test_tecnico_da_qualidade_nao_le_interno_da_ti(cliente, como):
 
 
 def test_tecnico_ti_le_interno_da_qualidade(cliente, como):
-    """D1 com a regra de sempre: equipe vê o interno nos chamados que lê."""
+    """D1 com a API-8: o técnico da TI vê o interno nos chamados que lê."""
     cid = CHAMADOS["q_atribuido"]
     r = cliente.get(f"{API}/comentarios/chamado/{cid}", headers=como("tecnico_ti"))
     assert {c["id"] for c in r.json()} == {comentario_publico(cid), comentario_interno(cid)}
