@@ -7,8 +7,10 @@ texto), o autor de comentário de antes da API-5 seguia mexendo nele, e o 403
 de autoria dizia a qualquer conta que um id de comentário existia.
 
 Agora a regra é a do `GET /comentarios/{id}`: o chamado legível e, se
-interno, ser da equipe. Fora disso, o 404 de um id que não existe, antes da
-autoria. Dentro, as regras de sempre.
+interno, ser administrador ou técnico da TI (API-8; até a API-7, ser da
+equipe). Fora disso, o 404 de um id que não existe, antes da autoria.
+Dentro, as regras de sempre. A matriz do interno por perfil e configuração
+está em `test_comentarios_internos_edicao.py`.
 """
 
 import pytest
@@ -183,7 +185,7 @@ class TestRegrasDeSempre:
             json={"comentario": "Agora seria interno", "is_interno": True},
         )
         assert resposta.status_code == 403
-        assert resposta.json() == {"detail": "Apenas administrador ou técnico pode marcar comentário como interno"}
+        assert resposta.json() == {"detail": "Apenas administrador ou técnico da TI pode marcar comentário como interno"}
 
     def test_tecnico_marca_o_proprio_como_interno(self, cliente, como, comentarios):
         resposta = cliente.put(

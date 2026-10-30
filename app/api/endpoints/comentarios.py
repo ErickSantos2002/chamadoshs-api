@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.api.deps import get_current_user, get_db, is_admin, is_staff
+from app.api.deps import get_current_user, get_db, is_admin
 from app.models.chamado import Chamado
 from app.models.comentario import ComentarioChamado
 from app.models.usuario import Usuario
@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 COMENTARIO_NAO_ENCONTRADO = "Comentário não encontrado"
 CRIAR_INTERNO_NEGADO = "Apenas administrador ou técnico da TI pode criar comentário interno"
+MARCAR_INTERNO_NEGADO = "Apenas administrador ou técnico da TI pode marcar comentário como interno"
 
 
 def _buscar_comentario_visivel(db: Session, comentario_id: int, usuario: Usuario) -> ComentarioChamado:
@@ -42,7 +43,9 @@ def _buscar_comentario_visivel(db: Session, comentario_id: int, usuario: Usuario
     if chamado is None or not pode_ler_chamado(usuario, chamado):
         raise HTTPException(status_code=404, detail=COMENTARIO_NAO_ENCONTRADO)
 
-    if comentario.is_interno and not pode_acessar_comentario_interno(usuario):
+    # `is not False`: NULL conta como interno, como no filtro da listagem
+    # (`is_(False)`) — na dúvida, fecha.
+    if comentario.is_interno is not False and not pode_acessar_comentario_interno(usuario):
         # 404 em vez de 403: um 403 confirmaria que existe um comentário
         # interno naquele id.
         raise HTTPException(status_code=404, detail=COMENTARIO_NAO_ENCONTRADO)
@@ -149,7 +152,10 @@ def atualizar_comentario(
     """
     Atualiza um comentário existente. Só o autor ou um administrador, e só
     quem vê o comentário hoje (API-6, D11): quem não vê recebe o 404 de um id
-    que não existe, antes do 403 de autoria.
+    que não existe, antes do 403 de autoria. Isso inclui o interno para quem
+    não pode o interno (API-8), autor ou não: não o edita nem o torna
+    público. Tornar interno um comentário público é só de administrador e
+    técnico da TI.
     """
     comentario = _buscar_comentario_visivel(db, comentario_id, current_user)
 
@@ -159,13 +165,14 @@ def atualizar_comentario(
             detail="Só é possível editar comentários de sua autoria",
         )
 
-    if comentario_data.is_interno and not is_staff(current_user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Apenas administrador ou técnico pode marcar comentário como interno",
-        )
+    if comentario_data.is_interno and not pode_acessar_comentario_interno(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=MARCAR_INTERNO_NEGADO)
 
     update_data = comentario_data.model_dump(exclude_unset=True)
+    # `is_interno: null` não é uma visibilidade: vale como não enviado. Sem
+    # isto o NULL ia para o banco (a coluna aceita) e a resposta quebrava.
+    if update_data.get("is_interno", False) is None:
+        del update_data["is_interno"]
     for field, value in update_data.items():
         setattr(comentario, field, value)
 
@@ -182,7 +189,8 @@ def deletar_comentario(
 ):
     """
     Deleta um comentário. Só o autor ou um administrador, e só quem vê o
-    comentário hoje — como na edição.
+    comentário hoje — como na edição: o interno, só quem pode o interno
+    (API-8).
     """
     comentario = _buscar_comentario_visivel(db, comentario_id, current_user)
 
