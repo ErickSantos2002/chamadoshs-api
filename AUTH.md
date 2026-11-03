@@ -252,8 +252,9 @@ def excluir(item_id: int, _admin: Usuario = Depends(require_admin)):
 
 - `require_admin` — só Administrador
 - `require_equipe_ti` — Administrador, ou Técnico da TI (setor em
-  `SETORES_TI_IDS`, pela `integra_equipe_ti` da API-6). Para a administração
-  global; recusa com 403 `"Requer perfil: Administrador ou Técnico da TI"`
+  `SETORES_TI_IDS`, pela `integra_equipe_ti` da API-6, e nunca conta de
+  serviço — API-10). Para a administração global; recusa com 403
+  `"Requer perfil: Administrador ou Técnico da TI"`
 - `require_staff` — Administrador ou Técnico, de qualquer setor. Não serve
   para recurso global: o perfil sozinho não diz de qual equipe a pessoa é
 - `require_roles("A", "B")` — fábrica, para combinações fora dessas duas
@@ -287,13 +288,43 @@ banco fica como estava. Sem `SETORES_TI_IDS` válida, só o administrador.
 A Qualidade não tem permissão administrativa global (A7-3). Alteração de SLA
 e de categoria não tem trilha própria (risco residual, A7-7).
 
+**Conta de serviço (API-10, decisão C1):** nunca integra a equipe da TI,
+qualquer que seja o perfil e o setor. A regra mora só em `integra_equipe_ti`
+e chega por ela a tudo que dela deriva: `integra_equipe_ti: false` no
+`/auth/me`, 403 nas rotas de `require_equipe_ti`, e o comentário interno
+fechado como para quem não pode o interno (tabela abaixo) — inclusive o que
+a própria conta escreveu antes. Só `conta_de_servico` igual a `False` conta
+como pessoa; `None` ou valor que não é booleano não integra. O comentário
+público e o que a regra de responsável já recusava (API-9) não mudam.
+
+| Conta de serviço | `integra_equipe_ti` | `require_equipe_ti` | Comentário interno | Lê e altera chamados pelo perfil |
+|---|---|---|---|---|
+| Técnico num setor da TI | `false` (até a API-9, `true`) | 403 (até a API-9, passava) | não (até a API-9, sim) | **sim**, TI e Qualidade — pendência |
+| Técnico da Qualidade | `false` | 403 | não | **sim**, a Qualidade — pendência |
+| Técnico de outro setor, sem setor, perfil Usuário | `false` | 403 | não | não |
+| **Administrador** | `false` | **passa, pelo perfil** | **sim, pelo perfil** | **sim, todos** — pendência |
+
+As três pendências **não são aprovação**, e ficam registradas:
+- **Administrador de serviço.** `is_admin` vale nas rotas antes de
+  `integra_equipe_ti`; a C1 não mudou o perfil de administrador, e a conta
+  compartilhada de administração (citada na migration de
+  `conta_de_servico`) mantém todo o poder do perfil. Mudar isso é mudar a
+  semântica global do Administrador e precisa de decisão própria.
+- **Leitura pelo perfil.** `setores_lidos_pelo_perfil` (API-5) não passa por
+  `integra_equipe_ti`: a conta de serviço técnica lê os chamados do setor
+  dela, como o painel de parede precisa. Mantida.
+- **Escrita de equipe pelo perfil.** `pode_alterar_como_equipe` (API-6) usa o
+  mesmo alcance, então a mesma conta ainda faz `PUT`, arquiva, desarquiva e
+  cancela chamado alheio no alcance. Não há uso documentado; tirar a escrita
+  mantendo a leitura é a decisão proposta.
+
 **Administrador ou Técnico:** atualizar, arquivar e desarquivar chamados —
 só os do alcance do perfil (API-6, ver "Escrita de chamado pela equipe").
 
 **Administrador ou Técnico da TI, nos chamados que lê**
 (`pode_acessar_comentario_interno`, API-8): ler e criar comentário interno.
 É a mesma regra de `require_equipe_ti`: administrador pelo perfil, técnico
-só num setor de `SETORES_TI_IDS`. O técnico da Qualidade, o de outro setor e
+só num setor de `SETORES_TI_IDS` e só se não for conta de serviço (API-10). O técnico da Qualidade, o de outro setor e
 o sem setor não leem nem criam interno — nem como solicitante, nem como
 responsável, nem nos chamados da Qualidade —, e sem `SETORES_TI_IDS` válida
 só o administrador. As duas coisas são exigidas: o técnico da TI não vê o

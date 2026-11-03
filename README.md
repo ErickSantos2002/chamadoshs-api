@@ -199,6 +199,8 @@ por perfil" e "Leitura de chamado").
   tarefas recorrentes
 - Visualizar todos os chamados
 - Gerar relatórios completos
+- Conta de serviço com perfil Administrador mantém o poder do perfil
+  (pendência da API-10, ver [AUTH.md](AUTH.md))
 
 ### Técnico
 - Técnico da TI (setor listado em `SETORES_TI_IDS`): visualizar e gerenciar
@@ -214,6 +216,10 @@ por perfil" e "Leitura de chamado").
   Qualidade (API-7)
 - Comentar e resolver; comentário interno, só o técnico da TI (API-8) — o
   da Qualidade, o de outro setor e o sem setor não o veem nem o criam
+- Conta de serviço nunca é da equipe da TI (API-10): não administra, não vê
+  nem cria comentário interno e não recebe chamado da TI, mesmo com perfil
+  Técnico num setor da TI. Ainda lê — e, por pendência registrada no
+  [AUTH.md](AUTH.md), altera — os chamados do alcance do perfil
 - Gerar relatórios da equipe
 
 ### Usuário

@@ -12,6 +12,105 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Segurança — contas de serviço fora da equipe da TI (API-10, C1)
+- **Decisão C1 (homologação FE-5 × API-9):** conta de serviço não integra a
+  equipe da TI. A homologação achou o defeito: uma conta de serviço com
+  perfil Técnico num setor de `SETORES_TI_IDS` recebia
+  `integra_equipe_ti: true` no `/auth/me`, passava em `require_equipe_ti` e
+  criava comentário interno (201). Era o risco residual registrado na API-7,
+  na API-8 e na API-9; agora é fechado.
+
+  **Onde:** só em `integra_equipe_ti` (`app/services/leitura_service.py`),
+  a definição única da equipe. Nada foi repetido por rota, nenhuma segunda
+  definição de equipe foi criada, e `SETORES_TI_IDS` não mudou. Sem
+  migration, sem coluna nova, sem variável nova, versão inalterada. Só
+  `conta_de_servico` igual a `False` conta como pessoa: `None` (o que o ORM
+  deixa antes do flush) ou qualquer valor que não seja booleano não
+  integra. No banco a coluna é `NOT NULL DEFAULT false`, então em produção
+  o caso não existe; o tratamento é só defesa.
+
+  **O que a conta de serviço perde** (todas as que não são administradoras;
+  na prática, a técnica de setor da TI, a única que integrava):
+  - `integra_equipe_ti: false` no `/auth/me`;
+  - as rotas de `require_equipe_ti`: escrita de setor e de categoria,
+    `PUT /sla-configs/{prioridade}`, as sete rotas de tarefas recorrentes,
+    a trilha de setor (`GET /eventos/`) e `GET /chamados/responsaveis-ti` —
+    403 `"Requer perfil: Administrador ou Técnico da TI"`, nada gravado;
+  - o comentário interno: a listagem traz só os públicos, a busca por id
+    dá 404 igual a id inexistente, criar dá 403 `CRIAR_INTERNO_NEGADO` sem
+    gravar, e editar ou excluir dá 404 — **mesmo o interno que a própria
+    conta escreveu antes**, que fica no banco e segue visível para a equipe;
+  - o comentário público continua (201), nos chamados que ela lê.
+
+  A regra de responsável (API-9) não muda: a conta de serviço já era
+  recusada (400 `"Não é possível atribuir um chamado a uma conta de
+  serviço"`), não aparecia na lista e não se autoatribuía.
+
+  **O que fica, de propósito — riscos residuais, não aprovação:**
+  - **Conta de serviço com perfil Administrador mantém tudo do perfil.** A
+    C1 não muda o administrador: `is_admin` vale nas rotas antes de
+    `integra_equipe_ti`, e a conta administradora de serviço ainda
+    administra setores, categorias, SLA, tarefas, usuários e eventos, lê e
+    cria comentário interno e pede a lista de responsáveis. Recebe
+    `integra_equipe_ti: false` no `/auth/me`, então o FE-5 trata pelo
+    `role` (`podeAdministrar` é `role === 'Administrador' ||
+    integra_equipe_ti`). A migration de `conta_de_servico` cita "a conta
+    compartilhada de administração" e o login via FortiPAM entre as contas
+    de serviço reais: **pela migration, existe em produção** (não conferido
+    no banco). Tirar dela o poder do perfil muda a semântica global do
+    Administrador e exige decisão própria. Por isso, não é verdade que toda
+    conta de serviço perdeu poder: só as não administradoras.
+  - **A conta de serviço técnica da TI ainda lê e altera chamados pelo
+    alcance do perfil.** A leitura (API-5) e a escrita de equipe (API-6:
+    `PUT`, arquivar, desarquivar, cancelar chamado alheio) usam
+    `setores_lidos_pelo_perfil`, que não passa por `integra_equipe_ti`. A
+    leitura é a do painel de parede citado na migration, e foi mantida. A
+    escrita não tem uso documentado: a decisão de tirá-la, mantendo a
+    leitura, fica proposta. A técnica de serviço da Qualidade, da mesma
+    forma, lê e altera os chamados da Qualidade.
+  - **Dependência de produção não verificada:** não se sabe, daqui, se
+    alguma conta de serviço técnica da TI é usada por pessoas (pelo
+    FortiPAM, por exemplo) para administrar. Se for, ela perde a
+    administração com a API-10. Conferir antes do deploy quais contas têm
+    `conta_de_servico = true`, com qual perfil e setor; nenhuma exceção foi
+    criada.
+
+  **Compatibilidade com o FE-5:** nenhuma mudança no frontend. O FE-5 já
+  decide pelo `/auth/me` (`podeAdministrar`) e só pede
+  `/chamados/responsaveis-ti` a quem pode reatribuir: a conta de serviço
+  técnica deixa de ver a administração e o interno, sem 403 na tela. Com o
+  FE-5 ainda no ar contra a API-9, ela continua vendo — é o defeito, e a
+  API-10 é que o fecha.
+
+  Testes: `test_conta_de_servico_equipe_ti.py` (a regra à mão, 14 tipos de
+  conta × 7 configurações de `SETORES_TI_IDS`, contra `integra_equipe_ti`,
+  `require_equipe_ti`, `pode_acessar_comentario_interno` e
+  `pode_ser_novo_responsavel`; marcar como serviço nunca concede; valor
+  ambíguo não é pessoa), `test_conta_de_servico_rotas.py` (as rotas com
+  token real, recusa sem escrita, comentários interno e público, ordem
+  404 antes do 403, responsáveis, e as duas classes de pendência que
+  descrevem o administrador de serviço e o alcance de perfil) e
+  `test_conta_de_servico_rotas_postgres.py`, que roda as de rota em
+  PostgreSQL real. Sem a guarda da C1, 29 dos 496 testes da matriz e 18 dos
+  95 de rota falham. Testes anteriores mudaram de expectativa, de
+  propósito: os conjuntos `TECNICOS_DA_TI`/`DA_TI` de
+  `test_administracao_equipe_ti.py`, `test_comentarios_internos.py`,
+  `test_me_equipe_ti.py` e `test_permissao_equipe_ti.py` perderam a conta
+  de serviço técnica da TI (os que importam esses conjuntos seguem
+  sozinhos), e
+  `test_comentarios_internos.py::test_conta_de_servico_tecnico_da_ti_ve_o_interno`
+  (o risco residual da API-8) virou
+  `test_conta_de_servico_tecnico_da_ti_nao_ve_o_interno`.
+
+  Validação local: 8.503 testes únicos, igual à coleta — 5.536 em SQLite e
+  2.967 em PostgreSQL 15.19 descartável, serial, em lotes conferidos pelo
+  junit, sem skip. Inclui a matriz de concorrência T1–T14 (63 em
+  PostgreSQL). Sobre os 7.815 da API-9: +686 novos (496 da matriz, 95 de
+  rota em SQLite e 95 em PostgreSQL), +2 do parâmetro
+  `conta_de_servico_ti`, que entrou em
+  `test_comentarios_internos.py::test_o_interno_nao_vaza_por_outra_resposta`
+  (SQLite e PostgreSQL) ao sair da equipe, e 2 renomeados.
+
 ### Adicionado e corrigido — responsáveis elegíveis da TI (API-9, F5-1)
 - **Decisão F5-1 (auditoria de compatibilidade FE-5 × API-8):** criar uma
   rota com os responsáveis elegíveis da TI e impedir novas atribuições a
@@ -1512,6 +1611,29 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   novo responsável. Com o FE-5 no ar, que monta o seletor da TI com a
   rota, o rollback tem de ser coordenado: voltar o front junto, ou aceitar
   o seletor sem opções (a rota passa a responder 422).
+
+- **API-10 (contas de serviço): sem migration, sem variável nova, sem
+  frontend novo — depende da `SETORES_TI_IDS` da API-6 e vem com a API-9,
+  antes do FE-5 (F5-4).**
+
+  1. Os passos da API-6 à API-9, acima.
+  2. **Antes de subir**, conferir no banco de produção (só leitura) quais
+     contas são de serviço: `SELECT id, nome, role_id, setor_id, ativo FROM
+     usuarios WHERE conta_de_servico;`. A de perfil Técnico num setor de
+     `SETORES_TI_IDS` **perde a administração e o comentário interno**. Se
+     alguma for usada por pessoas para administrar (pelo FortiPAM, por
+     exemplo), decidir antes — o código não tem exceção. A de perfil
+     Administrador não muda (pendência registrada).
+  3. Depois de subir: a conta de serviço técnica da TI recebe
+     `integra_equipe_ti: false` no `/auth/me` e 403 em
+     `GET /tarefas-recorrentes/`; um técnico da TI de verdade continua.
+
+  **Rollback:** voltar a imagem da API-9; nada no banco a desfazer, e o
+  frontend não precisa voltar. **Mas o rollback reabre o defeito:** a conta
+  de serviço técnica da TI volta a administrar, a ver e criar comentário
+  interno e a receber `integra_equipe_ti: true` — e o FE-5 volta a mostrar a
+  ela a administração. Avaliar desativar essas contas antes de voltar a
+  imagem, ou aceitar o risco por escrito.
 
 - **Antes de ligar a Qualidade: concorrência em PostgreSQL.** A API-4b já
   prova em PostgreSQL local, um caso por rota, que a escrita da Qualidade
