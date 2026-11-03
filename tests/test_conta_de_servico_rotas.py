@@ -15,6 +15,7 @@ perfil, e a técnica da TI ainda lê e altera chamados pelo alcance de perfil
 
 import pytest
 import requests
+from sqlalchemy import text
 
 import main
 from app.api.deps import EQUIPE_TI_NEGADA
@@ -77,6 +78,13 @@ def servicos(cenario_de_leitura, sessao):
     sessao.get(Chamado, CHAMADOS["ti_arquivado"]).tecnico_responsavel_id = 72
     sessao.get(Chamado, CHAMADOS["ti_cancelado"]).solicitante_id = 74
     sessao.commit()
+    if sessao.bind.dialect.name == "postgresql":
+        # Os ids do cenário são explícitos; sem isto o POST seguinte pegaria o 1.
+        for tabela in ("setores", "categorias", "tarefas_recorrentes"):
+            sessao.execute(text(
+                f"SELECT setval(pg_get_serial_sequence('{tabela}', 'id'), (SELECT MAX(id) FROM {tabela}))"
+            ))
+        sessao.commit()
     return {**cenario_de_leitura, **{n: v[0] for n, v in SERVICOS.items()}, "tecnico_ti_dois": 56}
 
 
