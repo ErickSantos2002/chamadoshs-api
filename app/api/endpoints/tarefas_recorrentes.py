@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 import logging
 
@@ -14,6 +14,7 @@ from app.schemas.tarefa_recorrente import (
     TarefaRecorrenteUpdate,
     TarefaRecorrenteResponse,
     ExecucaoResponse,
+    LembretesDoDiaResponse,
     RealizarTarefaRequest,
 )
 from app.services.recorrencia_service import calcular_proxima_data
@@ -85,6 +86,55 @@ def listar_tarefas(
     query = query.order_by(TarefaRecorrente.proxima_data.asc())
     tarefas = query.offset(skip).limit(limit).all()
     return [_montar_response(t, db) for t in tarefas]
+
+
+@router.get("/lembretes-do-dia", response_model=LembretesDoDiaResponse)
+def lembretes_do_dia(
+    _equipe_ti: Usuario = Depends(require_equipe_ti),
+    db: Session = Depends(get_db),
+):
+    """
+    O lembrete "tarefas do dia" do quadro, em leitura mínima (API-11, S1).
+
+    As tarefas ativas que vencem hoje ou já venceram, e as realizadas hoje —
+    a mesma regra que o quadro aplica hoje sobre `GET /tarefas-recorrentes/`,
+    mas com o dia de Brasília calculado aqui e só id, título, próxima data e
+    situação. Nada de descrição, instruções, responsável ou execuções. Ordem
+    estável: próxima data, depois id. Só lê.
+
+    Quem lê é quem lê o módulo: administrador humano e técnico da TI
+    (`require_equipe_ti`). Nenhuma conta de serviço passa — nem a do painel de
+    parede. Liberar o painel exige identificar a conta da TV de um jeito que
+    não seja nome, perfil, `conta_de_servico`, IP, User-Agent nem parâmetro do
+    cliente, e esse mecanismo não existe ainda (ver docs/contas-de-servico.md).
+    Esta rota não abre nenhuma das sete rotas do módulo.
+    """
+    hoje = _hoje()
+    inicio, fim = datetime.combine(hoje, time.min), datetime.combine(hoje + timedelta(days=1), time.min)
+    realizadas_hoje = {
+        tarefa_id
+        for (tarefa_id,) in db.query(TarefaRecorrenteExecucao.tarefa_id)
+        .filter(TarefaRecorrenteExecucao.realizada_em >= inicio, TarefaRecorrenteExecucao.realizada_em < fim)
+        .distinct()
+    }
+    tarefas = (
+        db.query(TarefaRecorrente.id, TarefaRecorrente.titulo, TarefaRecorrente.proxima_data)
+        .filter(TarefaRecorrente.ativo.is_(True))
+        .order_by(TarefaRecorrente.proxima_data.asc(), TarefaRecorrente.id.asc())
+        .all()
+    )
+    lembretes = []
+    for tarefa_id, titulo, proxima in tarefas:
+        if proxima < hoje:
+            situacao = "atrasada"
+        elif proxima == hoje:
+            situacao = "hoje"
+        elif tarefa_id in realizadas_hoje:
+            situacao = "realizada_hoje"
+        else:
+            continue
+        lembretes.append({"id": tarefa_id, "titulo": titulo, "proxima_data": proxima, "situacao": situacao})
+    return {"data": hoje, "tarefas": lembretes}
 
 
 @router.get("/{tarefa_id}", response_model=TarefaRecorrenteResponse)
