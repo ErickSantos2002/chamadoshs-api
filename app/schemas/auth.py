@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional
 
 
@@ -24,6 +24,21 @@ class UsuarioCreate(BaseModel):
     setor_id: Optional[int] = None
     role_id: int
     ativo: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sem_conta_de_servico(cls, dados):
+        """
+        `POST /auth/registro` não decide se a conta é de serviço (API-11, S5).
+
+        O campo não existe aqui e o Pydantic descartava a chave calado: quem
+        mandava `true` recebia 201 e uma conta humana. Qualquer presença —
+        `true`, `false`, `null`, outro tipo — vira 422, sem criar a conta. A
+        conta de serviço nasce pelo `POST /usuarios/`, onde o campo existe.
+        """
+        if isinstance(dados, dict) and "conta_de_servico" in dados:
+            raise ValueError("conta_de_servico não é aceito em /auth/registro; use POST /usuarios/")
+        return dados
 
 
 class UsuarioUpdate(BaseModel):
