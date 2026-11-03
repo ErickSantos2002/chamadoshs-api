@@ -104,7 +104,16 @@ def pode_alterar_como_equipe(usuario: Usuario, chamado: Chamado) -> bool:
     `setores_lidos_pelo_perfil`, para que a equipe não altere o que não lê.
     O vínculo não entra: o técnico da Qualidade que abriu um chamado da TI o
     lê, e o cancela como solicitante, mas não o edita como equipe.
+
+    Conta de serviço nunca altera como equipe (API-11, S2), qualquer que seja
+    o perfil — nem a técnica da TI, nem a administradora. Ela continua lendo
+    o que `pode_ler_chamado` deixa (o painel de parede só lê), e o que não
+    passa por aqui fica como era: cancelar o que ela mesma abriu, comentar em
+    público, avaliar. Só `False` conta como pessoa, como em
+    `integra_equipe_ti`.
     """
+    if usuario.conta_de_servico is not False:
+        return False
     if is_admin(usuario):
         return True
     return chamado.setor_destino in setores_lidos_pelo_perfil(usuario)
@@ -198,6 +207,7 @@ def buscar_chamado_legivel(db: Session, chamado_id: int, usuario: Usuario) -> Ch
 
 
 FORA_DA_EQUIPE = "Este chamado não é da sua equipe"
+CONTA_DE_SERVICO_NAO_ALTERA = "Conta de serviço não altera chamado como equipe"
 
 
 def buscar_chamado_alteravel(db: Session, chamado_id: int, usuario: Usuario) -> Chamado:
@@ -212,5 +222,9 @@ def buscar_chamado_alteravel(db: Session, chamado_id: int, usuario: Usuario) -> 
     """
     chamado = buscar_chamado_legivel(db, chamado_id, usuario)
     if not pode_alterar_como_equipe(usuario, chamado):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORA_DA_EQUIPE)
+        # A conta de serviço recebe o motivo dela (API-11): "não é da sua
+        # equipe" seria falso para a técnica da TI, que lê o chamado pelo
+        # alcance da equipe. Só chega aqui quem já lê o chamado.
+        motivo = CONTA_DE_SERVICO_NAO_ALTERA if usuario.conta_de_servico is not False else FORA_DA_EQUIPE
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=motivo)
     return chamado

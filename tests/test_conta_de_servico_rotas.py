@@ -9,8 +9,9 @@ classificação — e, para cada recusa, o banco sem escrita.
 
 Duas classes descrevem, de propósito, o que a C1 NÃO muda e fica registrado
 como pendência (AUTH.md, API-10): a conta de serviço administradora passa pelo
-perfil, e a técnica da TI ainda lê e altera chamados pelo alcance de perfil
-(API-5/API-6), que não passa por `integra_equipe_ti`.
+perfil, e a técnica da TI ainda lê chamados pelo alcance de perfil
+(API-5/API-6), que não passa por `integra_equipe_ti`. A escrita por esse
+alcance saiu na API-11 (S2).
 """
 
 import pytest
@@ -26,6 +27,7 @@ from app.models.evento_setor import EventoDeSetor
 from app.models.historico import HistoricoChamado
 from app.models.sla_config import SLAConfig
 from app.models.tarefa_recorrente import TarefaRecorrente
+from app.services.leitura_service import CONTA_DE_SERVICO_NAO_ALTERA
 from app.services.responsavel_ti_service import CONTA_DE_SERVICO
 from leitura_cenario import CHAMADOS, ROLE_DE, comentario_interno, cenario_de_leitura  # noqa: F401
 
@@ -277,10 +279,12 @@ class TestResponsaveisDaTI:
         assert _foto(sessao) == antes
 
     def test_conta_de_servico_nao_se_autoatribui(self, cliente, como, sessao):
+        # API-11 (S2): a recusa vem antes, pela escrita de equipe, e não chega
+        # a olhar o responsável.
         antes = _foto(sessao)
         resposta = cliente.put(f"{API}/chamados/{CHAMADO_TI}", headers=como("servico_tecnico_ti"),
                                json={"tecnico_responsavel_id": 70})
-        assert (resposta.status_code, resposta.json()) == (400, {"detail": CONTA_DE_SERVICO})
+        assert (resposta.status_code, resposta.json()) == (403, {"detail": CONTA_DE_SERVICO_NAO_ALTERA})
         assert _foto(sessao) == antes
 
     def test_pessoa_elegivel_continua_aceita(self, cliente, como):
@@ -318,20 +322,21 @@ class TestPendenciaContaDeServicoAdministradora:
 
 
 @pytest.mark.usefixtures("configurar", "saidas")
-class TestPendenciaAlcanceDePerfil:
+class TestAlcanceDePerfil:
     """
-    Registro, não aprovação: a leitura (API-5) e a escrita de equipe (API-6)
-    por alcance de perfil usam `setores_lidos_pelo_perfil`, que não passa por
-    `integra_equipe_ti`. A leitura é a do painel de parede (migration de
-    `conta_de_servico`); a escrita não tem uso documentado.
+    A leitura por alcance de perfil (API-5) usa `setores_lidos_pelo_perfil`,
+    que não passa por `integra_equipe_ti`, e é a do painel de parede
+    (migration de `conta_de_servico`): fica. A escrita de equipe pelo mesmo
+    alcance (API-6) não tinha uso documentado e saiu na API-11 (S2).
     """
 
     def test_tecnica_da_ti_le_os_chamados_da_ti(self, cliente, como):
         ids = {c["id"] for c in cliente.get(f"{API}/chamados/", headers=como("servico_tecnico_ti")).json()}
         assert {CHAMADOS["ti_do_solicitante"], CHAMADO_TI} <= ids
 
-    def test_tecnica_da_ti_ainda_altera_como_equipe(self, cliente, como, sessao):
+    def test_tecnica_da_ti_nao_altera_como_equipe(self, cliente, como, sessao):
+        antes = _foto(sessao)
         resposta = cliente.put(f"{API}/chamados/{CHAMADO_TI}", headers=como("servico_tecnico_ti"),
                                json={"prioridade": "Alta"})
-        assert resposta.status_code == 200
-        assert resposta.json()["prioridade"] == "Alta"
+        assert (resposta.status_code, resposta.json()) == (403, {"detail": CONTA_DE_SERVICO_NAO_ALTERA})
+        assert _foto(sessao) == antes

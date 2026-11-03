@@ -24,7 +24,7 @@ from test_conta_de_servico_rotas import (  # noqa: F401
     TestAuthMe,
     TestComentariosInternos,
     TestOCasoDaHomologacao,
-    TestPendenciaAlcanceDePerfil,
+    TestAlcanceDePerfil,
     TestPendenciaContaDeServicoAdministradora,
     TestResponsaveisDaTI,
     como,
