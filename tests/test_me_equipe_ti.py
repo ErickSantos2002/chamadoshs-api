@@ -30,7 +30,8 @@ CAMPOS = {"id", "nome", "setor_id", "role_id", "ativo", "integra_equipe_ti"}
 
 # Com a lista válida, quem é da TI: os que estão no setor 1 com perfil de
 # equipe. O administrador da Qualidade não é, e administra do mesmo jeito.
-DA_TI = {"admin", "tecnico_ti", "conta_de_servico_ti"}
+# API-10 (C1): a conta de serviço técnica da TI saiu daqui — não integra a equipe.
+DA_TI = {"admin", "tecnico_ti"}
 
 
 def _me(cliente, headers):

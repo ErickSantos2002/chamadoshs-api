@@ -35,14 +35,14 @@ CONTAS = {
     "usuario_da_ti": ("Usuario", SETOR_TI, False),
     "perfil_desconhecido_na_ti": ("Auditor", SETOR_TI, False),
     "sem_perfil_na_ti": (None, SETOR_TI, False),
-    # Conta de serviço segue a regra do perfil e do setor, como em toda rota
-    # de equipe: a recusa dela é só como responsável de chamado (`chamados.py`).
+    # Conta de serviço não integra a equipe da TI (API-10, C1), nem técnica
+    # no setor da TI. Até a API-9 seguia a regra do perfil e do setor.
     "conta_de_servico_tecnico_ti": ("Tecnico", SETOR_TI, True),
     "conta_de_servico_usuario_ti": ("Usuario", SETOR_TI, True),
 }
 
 ADMINISTRADORES = {"admin_da_ti", "admin_da_qualidade", "admin_sem_setor"}
-TECNICOS_DA_TI = {"tecnico_ti", "tecnico_ti_com_acento", "conta_de_servico_tecnico_ti"}
+TECNICOS_DA_TI = {"tecnico_ti", "tecnico_ti_com_acento"}
 
 # SETORES_TI_IDS → se o técnico do setor 1 é da TI. O setor da Qualidade
 # (2) nunca vale como TI, nem quando está na lista.

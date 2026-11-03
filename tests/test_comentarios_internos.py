@@ -78,7 +78,8 @@ PERFIS = [
     "usuario_sem_setor",
 ]
 ADMINISTRADORES = {"admin", "admin_da_qualidade"}
-TECNICOS_DA_TI = {"tecnico_ti", "conta_de_servico_ti"}
+# API-10 (C1): a conta de serviço técnica da TI saiu daqui — não integra a equipe.
+TECNICOS_DA_TI = {"tecnico_ti"}
 
 # Os chamados que cada perfil lê só pelo vínculo — em qualquer configuração.
 VINCULOS = {
@@ -352,10 +353,12 @@ class TestCasosNomeados:
         cid = CHAMADOS["q_atribuido"]
         assert cliente.get(f"{API}/comentarios/{comentario_interno(cid)}", headers=h).status_code == 404
 
-    def test_conta_de_servico_tecnico_da_ti_ve_o_interno(self, cliente, como):
-        """Risco residual registrado: segue a regra do perfil e do setor, como na API-7."""
+    def test_conta_de_servico_tecnico_da_ti_nao_ve_o_interno(self, cliente, como):
+        """API-10 (C1): fecha o risco residual da API-8. Lê o chamado, não o interno."""
         cid = CHAMADOS["q_atribuido"]
-        assert cliente.get(f"{API}/comentarios/{comentario_interno(cid)}", headers=como("conta_de_servico_ti")).status_code == 200
+        h = como("conta_de_servico_ti")
+        assert cliente.get(f"{API}/chamados/{cid}", headers=h).status_code == 200
+        assert cliente.get(f"{API}/comentarios/{comentario_interno(cid)}", headers=h).status_code == 404
 
     def test_perfil_desconhecido_num_setor_da_ti_nao_ve_o_interno(self, cliente, como):
         cid = TODOS_OS_CHAMADOS["ti_do_perfil_desconhecido"]

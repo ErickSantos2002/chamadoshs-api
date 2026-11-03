@@ -120,7 +120,21 @@ def integra_equipe_ti(usuario: Usuario) -> bool:
     fora da Qualidade: o técnico sem setor, o de outro setor e o da Qualidade
     ficam de fora, e sem `SETORES_TI_IDS` ninguém é elegível. Conta de serviço
     é recusada antes, com a mensagem de sempre (ver `chamados.py`).
+
+    Conta de serviço nunca integra a equipe (API-10, decisão C1), nem com
+    perfil Técnico num setor da TI. Até a API-9 integrava, e por esta função
+    ganhava tudo o que dela deriva: `require_equipe_ti` (setores, categorias,
+    SLA, tarefas, trilha de setor, lista de responsáveis), o comentário
+    interno e o `integra_equipe_ti: true` do `/auth/me` — a homologação FE-5
+    criou interno com uma delas (201). Só `False` conta como pessoa: `None`,
+    que o ORM deixa antes do flush, não prova que a conta é humana.
+
+    O que vem do perfil de administrador não passa por aqui e não muda
+    (`is_admin`, nas rotas). A leitura e a escrita de equipe por alcance de
+    perfil (`setores_lidos_pelo_perfil`) também não — ver AUTH.md, API-10.
     """
+    if usuario.conta_de_servico is not False:
+        return False
     return is_staff(usuario) and usuario.setor_id is not None and usuario.setor_id in settings.setores_ti_ids
 
 

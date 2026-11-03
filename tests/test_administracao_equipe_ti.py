@@ -44,7 +44,8 @@ CATEGORIA_SEM_USO = 2
 # Quem pode, com `SETORES_TI_IDS` válida ("1"). Administrador passa pelo
 # perfil, em qualquer setor; técnico, só no setor da TI.
 ADMINISTRADORES = {"admin", "admin_da_qualidade"}
-TECNICOS_DA_TI = {"tecnico_ti", "conta_de_servico_ti"}
+# API-10 (C1): a conta de serviço técnica da TI saiu daqui — não integra a equipe.
+TECNICOS_DA_TI = {"tecnico_ti"}
 PERFIS = [
     "admin",
     "admin_da_qualidade",
