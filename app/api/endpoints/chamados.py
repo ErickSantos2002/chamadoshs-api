@@ -11,7 +11,7 @@ from datetime import datetime
 from app.api.deps import (
     get_current_user,
     get_db,
-    is_admin,
+    is_admin_humano,
     require_admin,
     require_equipe_ti,
     require_staff,
@@ -432,7 +432,9 @@ def criar_chamado(
                 detail="Atendente não é elegível para a Qualidade",
             )
 
-    if is_admin(current_user) and chamado_data.solicitante_id:
+    # Abrir em nome de outro é do administrador humano (API-11, S3): a conta
+    # de serviço administradora abre como ela mesma, como qualquer outra conta.
+    if is_admin_humano(current_user) and chamado_data.solicitante_id:
         solicitante_id = chamado_data.solicitante_id
     else:
         solicitante_id = current_user.id

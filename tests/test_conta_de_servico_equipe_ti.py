@@ -9,8 +9,8 @@ reproduziu: comentário interno criado com 201.
 
 Aqui, a regra escrita à mão — e não derivada do código — conferida contra as
 quatro funções que dependem dela, conta × configuração. O perfil de
-administrador não é assunto da C1: o administrador passa pelo perfil, e a
-conta de serviço administradora também (ver AUTH.md, API-10).
+administrador não é assunto da C1: o administrador passa pelo perfil — e,
+desde a API-11 (S3), só o humano; a conta de serviço administradora não.
 """
 
 import pytest
@@ -68,6 +68,11 @@ def _conta(nome, conta_de_servico=_PADRAO):
     )
 
 
+def _admin_humano(nome):
+    """Perfil Administrador e pessoa (API-11, S3)."""
+    return CONTAS[nome][0] == "Administrador" and not CONTAS[nome][2]
+
+
 def _integra_esperado(nome, configuracao):
     """A regra C1, à mão: pessoa, perfil de equipe, setor da TI."""
     perfil, setor, servico, _ = CONTAS[nome]
@@ -100,10 +105,10 @@ def test_nenhuma_conta_de_servico_integra_a_equipe(configurar, nome, configuraca
 @pytest.mark.parametrize("configuracao", CONFIGURACOES)
 @pytest.mark.parametrize("nome", CONTAS)
 def test_require_equipe_ti(configurar, nome, configuracao):
-    """Administrador pelo perfil (inclusive o de serviço); os demais, só quem integra."""
+    """Administrador humano; os demais, só quem integra. API-11 (S3): o de serviço não passa mais."""
     configurar(configuracao)
     conta = _conta(nome)
-    if CONTAS[nome][0] == "Administrador" or _integra_esperado(nome, configuracao):
+    if _admin_humano(nome) or _integra_esperado(nome, configuracao):
         assert require_equipe_ti(current_user=conta) is conta
     else:
         with pytest.raises(HTTPException) as recusa:
@@ -115,7 +120,7 @@ def test_require_equipe_ti(configurar, nome, configuracao):
 @pytest.mark.parametrize("nome", CONTAS)
 def test_comentario_interno(configurar, nome, configuracao):
     configurar(configuracao)
-    esperado = CONTAS[nome][0] == "Administrador" or _integra_esperado(nome, configuracao)
+    esperado = _admin_humano(nome) or _integra_esperado(nome, configuracao)
     assert pode_acessar_comentario_interno(_conta(nome)) is esperado
 
 

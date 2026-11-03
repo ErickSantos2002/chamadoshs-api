@@ -50,7 +50,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Query, Session
 
-from app.api.deps import is_admin, is_staff
+from app.api.deps import is_admin, is_admin_humano, is_staff
 from app.core.config import settings
 from app.models.chamado import Chamado
 from app.models.usuario import Usuario
@@ -159,8 +159,12 @@ def pode_acessar_comentario_interno(usuario: Usuario) -> bool:
     chamado é outra, e as duas são exigidas — o técnico da TI não vê o
     interno de um chamado que não lê. Sem `SETORES_TI_IDS` válida, só o
     administrador.
+
+    O administrador é o humano (API-11, S3): a conta de serviço
+    administradora não vê nem cria interno, como a técnica (API-10). Nenhum
+    uso documentado dependia disso — o painel de parede não lê comentário.
     """
-    return is_admin(usuario) or integra_equipe_ti(usuario)
+    return is_admin_humano(usuario) or integra_equipe_ti(usuario)
 
 
 def escopo_de_leitura(query: Query, usuario: Usuario) -> Query:

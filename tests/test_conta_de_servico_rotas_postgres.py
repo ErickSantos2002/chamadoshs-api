@@ -25,7 +25,7 @@ from test_conta_de_servico_rotas import (  # noqa: F401
     TestComentariosInternos,
     TestOCasoDaHomologacao,
     TestAlcanceDePerfil,
-    TestPendenciaContaDeServicoAdministradora,
+    TestContaDeServicoAdministradora,
     TestResponsaveisDaTI,
     como,
     configurar,

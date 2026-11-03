@@ -7,11 +7,11 @@ API-9, uma conta de serviço técnica no setor da TI recebeu
 (201). Aqui, com token de verdade, cada rota que dependia dessa
 classificação — e, para cada recusa, o banco sem escrita.
 
-Duas classes descrevem, de propósito, o que a C1 NÃO muda e fica registrado
-como pendência (AUTH.md, API-10): a conta de serviço administradora passa pelo
-perfil, e a técnica da TI ainda lê chamados pelo alcance de perfil
-(API-5/API-6), que não passa por `integra_equipe_ti`. A escrita por esse
-alcance saiu na API-11 (S2).
+Duas classes descrevem o que a C1 não mudava e a API-10 registrou como
+pendência: a conta de serviço administradora passava pelo perfil — não passa
+mais desde a API-11 (S3) —, e a técnica da TI lê chamados pelo alcance de
+perfil (API-5/API-6), que não passa por `integra_equipe_ti`; a leitura fica,
+a escrita por esse alcance saiu na API-11 (S2).
 """
 
 import pytest
@@ -262,7 +262,7 @@ class TestComentariosInternos:
 @pytest.mark.usefixtures("configurar", "saidas")
 class TestResponsaveisDaTI:
     def test_a_lista_nao_traz_conta_de_servico(self, cliente, como):
-        for quem in ("admin", "tecnico_ti", "servico_admin_ti"):
+        for quem in ("admin", "tecnico_ti"):
             resposta = cliente.get(f"{API}/chamados/responsaveis-ti", headers=como(quem))
             assert resposta.status_code == 200
             ids = [x["id"] for x in resposta.json()]
@@ -295,30 +295,37 @@ class TestResponsaveisDaTI:
 
 
 @pytest.mark.usefixtures("configurar", "saidas")
-class TestPendenciaContaDeServicoAdministradora:
+class TestContaDeServicoAdministradora:
     """
-    Registro, não aprovação: a C1 não muda o perfil de administrador. A conta
-    de serviço administradora não integra a equipe (`/auth/me` false), mas
-    tudo que as rotas dão ao administrador pelo perfil ela mantém.
+    Até a API-10 era pendência registrada: a conta de serviço administradora
+    não integrava a equipe, mas mantinha pelo perfil tudo o que as rotas dão
+    ao administrador. Desde a API-11 (S3), o perfil sozinho não basta: ela
+    não administra, nem vê o interno. A matriz completa está em
+    `test_conta_de_servico_administradora.py`.
     """
 
     def test_auth_me_false(self, cliente, como):
         assert cliente.get(f"{API}/auth/me", headers=como("servico_admin_ti")).json()["integra_equipe_ti"] is False
 
-    @pytest.mark.parametrize("metodo,rota,corpo", ROTAS_DA_EQUIPE + [("GET", "/eventos/?alvo=usuario", None)])
-    def test_mantem_a_administracao_pelo_perfil(self, cliente, como, metodo, rota, corpo):
-        assert _pedir(cliente, metodo, rota, corpo, como("servico_admin_ti")).status_code in (200, 201)
+    @pytest.mark.parametrize("metodo,rota,corpo", ROTAS_DA_EQUIPE)
+    def test_nao_administra_como_equipe(self, cliente, como, sessao, metodo, rota, corpo):
+        antes = _foto(sessao)
+        resposta = _pedir(cliente, metodo, rota, corpo, como("servico_admin_ti"))
+        assert (resposta.status_code, resposta.json()) == (403, NEGADO)
+        assert _foto(sessao) == antes
 
-    def test_mantem_o_interno_pelo_perfil(self, cliente, como):
+    def test_nao_ve_nem_cria_o_interno(self, cliente, como, sessao):
         lista = cliente.get(f"{API}/comentarios/chamado/{CHAMADO_TI}", headers=como("servico_admin_ti")).json()
-        assert any(c["is_interno"] for c in lista)
+        assert lista and not any(c["is_interno"] for c in lista)
+        antes = _foto(sessao)
         criar = cliente.post(f"{API}/comentarios/", headers=como("servico_admin_ti"), json={
             "chamado_id": CHAMADO_TI, "comentario": "Interno da conta administradora", "is_interno": True,
         })
-        assert criar.status_code == 201
+        assert (criar.status_code, criar.json()) == (403, {"detail": CRIAR_INTERNO_NEGADO})
+        assert _foto(sessao) == antes
 
-    def test_mantem_a_gestao_de_usuarios(self, cliente, como):
-        assert cliente.get(f"{API}/usuarios/{20}/eventos", headers=como("servico_admin_ti")).status_code == 200
+    def test_nao_ve_a_trilha_de_usuarios(self, cliente, como):
+        assert cliente.get(f"{API}/usuarios/{20}/eventos", headers=como("servico_admin_ti")).status_code == 403
 
 
 @pytest.mark.usefixtures("configurar", "saidas")

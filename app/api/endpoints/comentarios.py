@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.api.deps import get_current_user, get_db, is_admin
+from app.api.deps import get_current_user, get_db, is_admin_humano
 from app.models.chamado import Chamado
 from app.models.comentario import ComentarioChamado
 from app.models.usuario import Usuario
@@ -159,7 +159,8 @@ def atualizar_comentario(
     """
     comentario = _buscar_comentario_visivel(db, comentario_id, current_user)
 
-    if comentario.usuario_id != current_user.id and not is_admin(current_user):
+    # Comentário alheio, só o administrador humano (API-11, S3).
+    if comentario.usuario_id != current_user.id and not is_admin_humano(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Só é possível editar comentários de sua autoria",
@@ -194,7 +195,8 @@ def deletar_comentario(
     """
     comentario = _buscar_comentario_visivel(db, comentario_id, current_user)
 
-    if comentario.usuario_id != current_user.id and not is_admin(current_user):
+    # Comentário alheio, só o administrador humano (API-11, S3).
+    if comentario.usuario_id != current_user.id and not is_admin_humano(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Só é possível excluir comentários de sua autoria",
