@@ -41,6 +41,19 @@ Isso vale para migrações **aditivas**, que é o que este projeto tem tido —
 essa propriedade, e aí o rollback da imagem deixa de ser seguro: ao escrever
 uma dessas, diga isso no cabeçalho do arquivo.
 
+## Mudança de permissão: conferir quem perde acesso
+
+Mudança de permissão não tem migration para lembrar dela, e o efeito só
+aparece quando alguém tenta trabalhar. Antes de subir uma versão que restringe
+perfil ou conta de serviço (API-7 em diante), conferir no banco, **só leitura**,
+quem é afetado — a seção **Ação necessária no deploy** do `CHANGELOG.md` diz a
+consulta de cada uma.
+
+**API-11:** conta de serviço deixa de administrar. Antes de subir, contar os
+administradores humanos ativos; **com zero, não subir** — a administração
+ficaria sem ninguém. Inventário, recuperação e plano de migração das contas
+compartilhadas: [docs/contas-de-servico.md](docs/contas-de-servico.md).
+
 ## Banco novo x banco existente
 
 São dois caminhos, e **misturar os dois falha**:

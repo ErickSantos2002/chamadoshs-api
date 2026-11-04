@@ -12,6 +12,107 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Segurança — menor privilégio das contas de serviço (API-11)
+- **Decisões S1–S6 (auditoria pós-API-10):** conta de serviço lê o que o
+  perfil deixa e não age como equipe nem como administrador. A API-10 tirou
+  a conta de serviço da equipe da TI, mas a auditoria seguinte achou o que
+  ficava: a **conta compartilhada de administração** (citada na migration
+  de `conta_de_servico`) mantinha todo o poder do perfil — resetar senha
+  alheia, mudar perfil e `conta_de_servico`, excluir chamado de vez sem
+  evento, e contava como "último administrador" (R1) —, e a **conta de
+  serviço técnica** ainda fazia `PUT`, arquivava, desarquivava e cancelava
+  chamado alheio pelo alcance do perfil, sem trilha além da de status (R2).
+  Política inteira, inventário pendente e plano de migração:
+  [docs/contas-de-servico.md](docs/contas-de-servico.md).
+
+  **S2 — escrita de equipe.** `pode_alterar_como_equipe` recusa toda conta
+  com `conta_de_servico` diferente de `False`, antes do perfil: `PUT`,
+  arquivar, desarquivar, cancelar chamado alheio e reatribuir dão 403
+  `"Conta de serviço não altera chamado como equipe"`, sem gravar nada — nem
+  versão, nem histórico, nem webhook. O 404 de quem não lê vem antes, e o
+  401/409/428 seguem. Continua: ler pelo alcance do perfil (o painel de
+  parede), abrir o próprio chamado, comentar em público, avaliar o próprio
+  e cancelar o que a conta abriu.
+
+  **S3 — administração.** `require_admin` passa a exigir administrador
+  humano (`is_admin_humano`: o perfil e `conta_de_servico = false`); a conta
+  de serviço administradora recebe 403 `"Conta de serviço não executa
+  administração"` em usuários (criar, editar, senha alheia, perfil, setor,
+  `conta_de_servico`, desativar, reativar, eventos), `POST /auth/registro`,
+  exclusão de chamado e de setor e diagnóstico. `require_equipe_ti` e o
+  comentário interno também passam a exigir o humano, e abrir chamado em
+  nome de outro e editar ou excluir comentário alheio idem. A **leitura não
+  muda**: `is_admin` (só o perfil) segue valendo para ler todos os
+  chamados. Nenhuma conta real foi alterada.
+
+  **S4 — último administrador humano.** A trava do `PUT`, do `PATCH
+  .../desativar` e do `DELETE` de usuário conta só quem é ativo,
+  administrador e pessoa, e avalia o estado final com tudo o que o `PUT`
+  muda junto (perfil, `ativo`, `conta_de_servico`): o último humano não é
+  rebaixado, desativado nem convertido em conta de serviço, com a conta
+  compartilhada ativa ou não. A contagem usa `SELECT ... FOR UPDATE`, então
+  dois administradores removendo um ao outro ao mesmo tempo deixam um. Sem
+  atalho para banco sem administrador humano: a recuperação é manual,
+  documentada e não executada.
+
+  **S5 — registro.** `POST /auth/registro` responde 422 a qualquer presença
+  de `conta_de_servico` no corpo, inclusive `false`, e não cria a conta. O
+  schema não tinha o campo e o descartava calado: `true` voltava 201 com uma
+  conta humana. `POST /usuarios/` (que tem o campo) e
+  `/auth/alterar-senha` não mudam.
+
+  **S1 — lembrete do painel, parcial.** Nova rota
+  `GET /tarefas-recorrentes/lembretes-do-dia`: só `id`, `titulo`,
+  `proxima_data` e `situacao` (`atrasada`, `hoje`, `realizada_hoje`), o dia
+  de Brasília em `data`, ordem por próxima data e id, só leitura. Lê quem já
+  lia o módulo: administrador humano e técnico da TI. **Nenhuma conta de
+  serviço passa, nem a da TV:** não existe identidade segura para ela —
+  nome, perfil, `conta_de_servico`, IP, `User-Agent` e parâmetro foram
+  descartados, e liberar para toda conta de serviço seria autorização
+  genérica. As opções (lista de ids por configuração, coluna de permissão,
+  perfil novo) esperam decisão. A rota não abre nenhuma das sete de
+  tarefas. O FE-5 não a usa.
+
+  **Riscos residuais e dependências:**
+  - **O lembrete "tarefas do dia" some na TV.** Como técnico de serviço,
+    já desde a API-10. Como administrador de serviço, o FE-5 segue pedindo
+    `GET /tarefas-recorrentes/?ativo=true` a cada 10 minutos (o
+    `podeAdministrar` vem do perfil) e agora recebe 403; o menu de
+    administração aparece e devolve 403. Resolver pede a decisão da S1 e um
+    FE novo (não iniciado).
+  - **Sem administrador humano em produção, ninguém administra pela API
+    depois do deploy.** Não verificado — ver a ação de deploy.
+  - Sem trilha geral de `PUT` de chamado e de exclusão definitiva, e
+    `GET /usuarios/` aberto a todo autenticado: fora do escopo (S6).
+  - SQL direto (n8n com acesso ao banco, DBeaver) passa por fora da regra.
+
+  Testes: `test_conta_de_servico_escritas.py` (80: 9 escritas de equipe ×
+  as contas de serviço, recusa sem efeito, o que continua, pessoas que não
+  mudam), `test_conta_de_servico_administradora.py` (74: 16 rotas só do
+  administrador e 18 da equipe, o que continua, o administrador humano),
+  `test_ultimo_administrador_humano.py` (21) e
+  `test_ultimo_administrador_humano_postgres.py` (24, com 3 cenários de
+  concorrência em PostgreSQL), `test_registro_sem_conta_de_servico.py` (11),
+  `test_lembretes_do_dia.py` (39) e `test_contas_tecnicas_postgres.py` (204,
+  os de S1, S2, S3 e S5 em PostgreSQL). Prova por mutação: sem a guarda,
+  falham 21 dos 80 de escrita, 37 dos 74 de administração, os 3 de
+  concorrência (sem o `FOR UPDATE`) e os 7 de registro. Testes anteriores
+  mudaram de expectativa, de propósito: as classes de pendência de
+  `test_conta_de_servico_rotas.py` viraram `TestAlcanceDePerfil` e
+  `TestContaDeServicoAdministradora` (agora recusas), o caso
+  `GET /eventos/?alvo=usuario` foi para a matriz de administração, e
+  `test_conta_de_servico_equipe_ti.py` passou a usar administrador humano.
+
+  Validação local: **8.954 testes únicos, igual à coleta** — 5.760 em
+  SQLite e 3.194 em PostgreSQL 15.19 descartável, serial, em lotes
+  conferidos pelo junit, sem skip, sem repetição. Inclui a matriz de
+  concorrência T1–T14 (63 em PostgreSQL). Sobre os 8.503 da API-10: +479
+  ids novos e 28 que saíram — das classes de pendência de
+  `test_conta_de_servico_rotas.py`, 13 em SQLite e 13 em PostgreSQL (12
+  renomeados em cada, e o de `alvo=usuario`, absorvido pela matriz de
+  administração), e 2 ids de `test_trava_rotas_protegidas.py` que mudaram
+  de nome porque `require_admin` virou função própria.
+
 ### Segurança — contas de serviço fora da equipe da TI (API-10, C1)
 - **Decisão C1 (homologação FE-5 × API-9):** conta de serviço não integra a
   equipe da TI. A homologação achou o defeito: uma conta de serviço com
@@ -1634,6 +1735,43 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   interno e a receber `integra_equipe_ti: true` — e o FE-5 volta a mostrar a
   ela a administração. Avaliar desativar essas contas antes de voltar a
   imagem, ou aceitar o risco por escrito.
+
+- **API-11 (menor privilégio das contas de serviço): sem migration, sem
+  variável nova, sem frontend novo — vem depois da API-10. Implantação
+  bloqueada enquanto a S1 (identidade da TV) e o inventário estiverem
+  pendentes.**
+
+  1. Os passos da API-6 à API-10, acima.
+  2. **Antes de subir**, o inventário de
+     [docs/contas-de-servico.md](docs/contas-de-servico.md), só leitura.
+     **Contar os administradores humanos ativos** (`role` Administrador,
+     `ativo`, `NOT conta_de_servico`): **se der zero, não subir** — a conta
+     compartilhada perde a administração e ninguém mais administra pela API.
+     Recuperar antes, pelo procedimento do documento (conta nominativa por
+     `criar_usuario_inicial.sql`, com registro de mudança). Se der um,
+     criar o segundo antes, pelo plano de migração nominativa.
+  3. Saber quem usa cada conta de serviço: as administradoras perdem toda a
+     administração e o comentário interno; as técnicas, a escrita de
+     equipe. Pessoas que administravam por elas precisam da conta
+     nominativa antes do deploy. Nenhuma conta é alterada pelo deploy.
+  4. Decidir o que fazer com o painel de parede: o lembrete "tarefas do dia"
+     some (e, se a TV for administradora de serviço, o quadro recebe 403 a
+     cada 10 minutos em `GET /tarefas-recorrentes/`). Aceitar por escrito
+     ou esperar a decisão da S1 e o FE correspondente.
+  5. Depois de subir: a conta de serviço administradora recebe 403
+     `"Conta de serviço não executa administração"` em `GET /usuarios/{id}/eventos`
+     e continua lendo `GET /chamados/`; uma conta de serviço técnica recebe
+     403 `"Conta de serviço não altera chamado como equipe"` num `PUT`;
+     `POST /auth/registro` com `conta_de_servico` dá 422; um administrador
+     humano continua administrando.
+
+  **Rollback:** voltar a imagem da API-10; nada no banco a desfazer, e o
+  frontend não precisa voltar. **Mas o rollback reabre R1, R2 e S4:** a
+  conta de serviço administradora volta a administrar tudo (senha alheia,
+  perfil, exclusão de chamado sem evento), a técnica volta a alterar
+  chamados como equipe, a conta compartilhada volta a contar como último
+  administrador, o registro volta a descartar `conta_de_servico` calado, e
+  a rota `lembretes-do-dia` sai (o FE-5 não a usa).
 
 - **Antes de ligar a Qualidade: concorrência em PostgreSQL.** A API-4b já
   prova em PostgreSQL local, um caso por rota, que a escrita da Qualidade

@@ -76,6 +76,11 @@ Duplica `POST /api/v1/usuarios/`, e é mantido só por compatibilidade.
 
 **Erros:**
 - `400 Bad Request`: Nome de usuário já cadastrado
+- `403 Forbidden`: conta de serviço, mesmo com perfil Administrador (API-11)
+- `422 Unprocessable Entity`: o corpo traz `conta_de_servico`, com qualquer
+  valor — inclusive `false` (API-11, S5). Esta rota não decide se a conta é de
+  serviço; até a API-10 a chave era descartada calada, e `true` criava uma
+  conta humana. Para criar conta de serviço, `POST /api/v1/usuarios/`.
 
 ### 3. Obter Usuário Logado
 
@@ -250,23 +255,40 @@ def excluir(item_id: int, _admin: Usuario = Depends(require_admin)):
     ...
 ```
 
-- `require_admin` — só Administrador
-- `require_equipe_ti` — Administrador, ou Técnico da TI (setor em
+- `require_admin` — só Administrador **humano**: o perfil, e não ser conta
+  de serviço (API-11, S3). A conta de serviço administradora recebe 403
+  `"Conta de serviço não executa administração"`; quem não tem o perfil, o
+  `"Requer perfil: Administrador"` de sempre
+- `require_equipe_ti` — Administrador humano, ou Técnico da TI (setor em
   `SETORES_TI_IDS`, pela `integra_equipe_ti` da API-6, e nunca conta de
   serviço — API-10). Para a administração global; recusa com 403
   `"Requer perfil: Administrador ou Técnico da TI"`
 - `require_staff` — Administrador ou Técnico, de qualquer setor. Não serve
   para recurso global: o perfil sozinho não diz de qual equipe a pessoa é
 - `require_roles("A", "B")` — fábrica, para combinações fora dessas duas
-- `is_admin(u)` / `is_staff(u)` — predicados, para regras de dono-ou-admin
-  dentro do handler
+- `is_admin(u)` / `is_staff(u)` — predicados de perfil. `is_admin` é só o
+  perfil e vale para a **leitura** (o administrador lê todos os chamados,
+  inclusive o de serviço)
+- `is_admin_humano(u)` — administrador que é pessoa (API-11): para tudo o que
+  é poder de administrador dentro do handler — abrir chamado em nome de
+  outro, editar ou excluir comentário alheio, comentário interno
 
 O perfil é lido do banco, não da claim do JWT: a claim fica congelada até o
 token expirar, então rebaixar alguém só surtiria efeito na renovação.
 
-**Administrador:** criar, editar e desativar usuários; **excluir setor**
-(A7-1); excluir chamado; eventos de conta; `POST /api/v1/auth/registro`;
-`/api/v1/diagnostico`.
+**Administrador humano** (`require_admin`; API-11, S3): criar, editar e
+desativar usuários — inclusive senha alheia, perfil, setor e
+`conta_de_servico`; **excluir setor** (A7-1); excluir chamado; eventos de
+conta; `POST /api/v1/auth/registro`; `/api/v1/diagnostico`.
+
+**Último administrador humano** (API-11, S4): o `PUT`, o `PATCH
+.../desativar` e o `DELETE` de usuário recusam com 400 o que deixaria o
+sistema sem administrador ativo que seja pessoa — rebaixar, desativar ou
+tornar conta de serviço, avaliado no estado final com tudo o que o `PUT` muda
+junto. A conta de serviço administradora não conta. A contagem trava as linhas
+(`FOR UPDATE`), então dois administradores removendo um ao outro ao mesmo
+tempo deixam um. Banco sem administrador humano não ganha atalho: ver
+[docs/contas-de-servico.md](docs/contas-de-servico.md).
 
 **Administrador ou Técnico da TI** (`require_equipe_ti`, API-7, D13): criar,
 editar, desativar e reativar setor; criar, editar e excluir categoria;
@@ -282,6 +304,7 @@ banco fica como estava. Sem `SETORES_TI_IDS` válida, só o administrador.
 | Escrita de categoria | sim | sim | 403 | 403 |
 | `PUT /sla-configs/{prioridade}` | sim | sim | 403 | 403 |
 | `/tarefas-recorrentes` (todas) | sim | sim | 403 | 403 |
+| `GET /tarefas-recorrentes/lembretes-do-dia` (API-11) | sim | sim | 403 | 403 |
 | `GET /eventos/` | todos os alvos | só setor | 403 | 403 |
 | `GET /chamados/responsaveis-ti` (API-9) | sim | sim | 403 | 403 |
 
@@ -297,33 +320,34 @@ a própria conta escreveu antes. Só `conta_de_servico` igual a `False` conta
 como pessoa; `None` ou valor que não é booleano não integra. O comentário
 público e o que a regra de responsável já recusava (API-9) não mudam.
 
-| Conta de serviço | `integra_equipe_ti` | `require_equipe_ti` | Comentário interno | Lê e altera chamados pelo perfil |
-|---|---|---|---|---|
-| Técnico num setor da TI | `false` (até a API-9, `true`) | 403 (até a API-9, passava) | não (até a API-9, sim) | **sim**, TI e Qualidade — pendência |
-| Técnico da Qualidade | `false` | 403 | não | **sim**, a Qualidade — pendência |
-| Técnico de outro setor, sem setor, perfil Usuário | `false` | 403 | não | não |
-| **Administrador** | `false` | **passa, pelo perfil** | **sim, pelo perfil** | **sim, todos** — pendência |
+**Conta de serviço (API-11):** lê, e não age como equipe nem como
+administrador. A política inteira, o inventário pendente e o plano de
+migração estão em [docs/contas-de-servico.md](docs/contas-de-servico.md).
 
-As três pendências **não são aprovação**, e ficam registradas:
-- **Administrador de serviço.** `is_admin` vale nas rotas antes de
-  `integra_equipe_ti`; a C1 não mudou o perfil de administrador, e a conta
-  compartilhada de administração (citada na migration de
-  `conta_de_servico`) mantém todo o poder do perfil. Mudar isso é mudar a
-  semântica global do Administrador e precisa de decisão própria.
-- **Leitura pelo perfil.** `setores_lidos_pelo_perfil` (API-5) não passa por
-  `integra_equipe_ti`: a conta de serviço técnica lê os chamados do setor
-  dela, como o painel de parede precisa. Mantida.
-- **Escrita de equipe pelo perfil.** `pode_alterar_como_equipe` (API-6) usa o
-  mesmo alcance, então a mesma conta ainda faz `PUT`, arquiva, desarquiva e
-  cancela chamado alheio no alcance. Não há uso documentado; tirar a escrita
-  mantendo a leitura é a decisão proposta.
+| Conta de serviço | `integra_equipe_ti` | `require_equipe_ti` | `require_admin` | Comentário interno | Lê chamados pelo perfil | Escrita de equipe |
+|---|---|---|---|---|---|---|
+| Técnico num setor da TI | `false` (API-10) | 403 (API-10) | 403 de perfil | não (API-10) | sim, TI e Qualidade | **403** (API-11; até a API-10, sim) |
+| Técnico da Qualidade | `false` | 403 | 403 de perfil | não | sim, a Qualidade | **403** (API-11) |
+| Técnico de outro setor, sem setor, perfil Usuário | `false` | 403 | 403 de perfil | não | não | 403 |
+| **Administrador** | `false` | **403** (API-11; até a API-10, passava) | **403** (API-11) | **não** (API-11) | sim, todos | **403** (API-11) |
+
+A escrita de equipe é o `PUT`, arquivar, desarquivar, cancelar chamado alheio
+e reatribuir: recusa com 403 `"Conta de serviço não altera chamado como
+equipe"`, nada gravado — nem versão, nem histórico, nem webhook. Continua: ler,
+abrir chamado próprio (sem `solicitante_id` de outro), comentar em público,
+avaliar e cancelar o que a própria conta abriu, e trocar a própria senha.
+
+O painel de parede é uma conta de serviço, e por isso a rota
+`lembretes-do-dia` também a recusa: não há ainda um jeito seguro de
+identificar a TV (dependência registrada no documento acima).
 
 **Administrador ou Técnico:** atualizar, arquivar e desarquivar chamados —
-só os do alcance do perfil (API-6, ver "Escrita de chamado pela equipe").
+só os do alcance do perfil (API-6, ver "Escrita de chamado pela equipe"), e
+nunca conta de serviço (API-11, S2).
 
 **Administrador ou Técnico da TI, nos chamados que lê**
 (`pode_acessar_comentario_interno`, API-8): ler e criar comentário interno.
-É a mesma regra de `require_equipe_ti`: administrador pelo perfil, técnico
+É a mesma regra de `require_equipe_ti`: administrador humano (API-11), técnico
 só num setor de `SETORES_TI_IDS` e só se não for conta de serviço (API-10). O técnico da Qualidade, o de outro setor e
 o sem setor não leem nem criam interno — nem como solicitante, nem como
 responsável, nem nos chamados da Qualidade —, e sem `SETORES_TI_IDS` válida
@@ -406,13 +430,15 @@ o histórico e os comentários. Decisões D1–D7, aprovadas em 29/10/2026:
 `PATCH …/arquivar`, `PATCH …/desarquivar` e o cancelamento de chamado alheio
 só no **alcance do perfil** — o mesmo da leitura por perfil, sem o vínculo:
 administrador, todos; técnico da TI, TI e Qualidade; técnico da Qualidade,
-a Qualidade; os demais, nenhum.
+a Qualidade; os demais, nenhum. Conta de serviço, nenhum, qualquer que seja o
+perfil (API-11, S2).
 
 | Quem pede | Resposta |
 |---|---|
 | Perfil Usuário, no PUT, arquivar e desarquivar | 403, antes de buscar o chamado (como antes) |
 | Quem não lê o chamado | 404 `"Chamado não encontrado"`, igual a id inexistente |
 | Quem lê só pelo vínculo (ex.: técnico da Qualidade responsável por chamado da TI) | 403 `"Este chamado não é da sua equipe"` |
+| Conta de serviço que lê o chamado (técnica ou administradora; API-11) | 403 `"Conta de serviço não altera chamado como equipe"` |
 | Equipe com o chamado no alcance | as regras de antes: 428/409 de versão, 400 de estado e de responsável |
 
 Cancelar segue aberto ao solicitante, para o chamado que abriu, qualquer que

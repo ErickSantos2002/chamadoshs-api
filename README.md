@@ -199,8 +199,11 @@ por perfil" e "Leitura de chamado").
   tarefas recorrentes
 - Visualizar todos os chamados
 - Gerar relatórios completos
-- Conta de serviço com perfil Administrador mantém o poder do perfil
-  (pendência da API-10, ver [AUTH.md](AUTH.md))
+- Administrar é de pessoa: conta de serviço com perfil Administrador lê
+  todos os chamados, mas não administra nada (API-11). O último
+  administrador humano ativo não pode ser rebaixado, desativado nem virar
+  conta de serviço. Política em
+  [docs/contas-de-servico.md](docs/contas-de-servico.md)
 
 ### Técnico
 - Técnico da TI (setor listado em `SETORES_TI_IDS`): visualizar e gerenciar
@@ -218,8 +221,8 @@ por perfil" e "Leitura de chamado").
   da Qualidade, o de outro setor e o sem setor não o veem nem o criam
 - Conta de serviço nunca é da equipe da TI (API-10): não administra, não vê
   nem cria comentário interno e não recebe chamado da TI, mesmo com perfil
-  Técnico num setor da TI. Ainda lê — e, por pendência registrada no
-  [AUTH.md](AUTH.md), altera — os chamados do alcance do perfil
+  Técnico num setor da TI. Lê os chamados do alcance do perfil, mas não os
+  altera como equipe (API-11)
 - Gerar relatórios da equipe
 
 ### Usuário
