@@ -3,6 +3,7 @@ from typing import Generator, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session, joinedload
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import decodificar_token
 from app.models.usuario import Usuario
@@ -210,3 +211,38 @@ def require_equipe_ti(current_user: Usuario = Depends(get_current_user)) -> Usua
     if is_admin_humano(current_user) or integra_equipe_ti(current_user):
         return current_user
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=EQUIPE_TI_NEGADA)
+
+
+def is_conta_do_painel(usuario: Usuario) -> bool:
+    """
+    Conta de serviço do painel de parede (API-11, S1): ativa, com
+    `conta_de_servico` verdadeiro e com o id em `PAINEL_CONTAS_IDS`.
+
+    As três vêm do usuário que `get_current_user` leu do banco pelo `sub` do
+    token — nada do pedido, nem nome, perfil, setor, IP ou User-Agent. O
+    `ativo` é conferido de novo aqui, embora `get_current_user` já recuse o
+    inativo: esta exceção não pode depender de quem a chama. Um id de pessoa
+    na lista não vale: a lista não é autorização por id, é a identificação da
+    TV entre as contas de serviço.
+    """
+    return (
+        usuario.conta_de_servico is True
+        and usuario.ativo is True
+        and usuario.id in settings.painel_contas_ids
+    )
+
+
+def require_leitura_dos_lembretes(current_user: Usuario = Depends(get_current_user)) -> Usuario:
+    """
+    Quem lê `GET /tarefas-recorrentes/lembretes-do-dia` (API-11, S1): quem
+    passa em `require_equipe_ti`, e a conta do painel (`is_conta_do_painel`).
+
+    Só esta rota usa esta dependency. A conta do painel não vira equipe —
+    `integra_equipe_ti`, `/auth/me` e as sete rotas do módulo não mudam — nem
+    administradora, qualquer que seja o perfil dela. A recusa é a de
+    `require_equipe_ti`, o mesmo corpo para todos: estar ou não na lista não
+    aparece na resposta.
+    """
+    if is_conta_do_painel(current_user):
+        return current_user
+    return require_equipe_ti(current_user)

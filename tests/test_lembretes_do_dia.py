@@ -5,16 +5,18 @@ O lembrete "tarefas do dia" do quadro lia `GET /tarefas-recorrentes/` inteiro e
 filtrava no navegador, com o dia do navegador. A rota nova devolve só o que o
 lembrete mostra — id, título, próxima data, situação —, com o dia de Brasília.
 
-Quem lê é quem já lia o módulo: administrador humano e técnico da TI. Nenhuma
-conta de serviço passa, nem uma com cara de painel de parede: sem um jeito
-seguro de identificar a TV, a rota não abre exceção para ela (ver
-docs/contas-de-servico.md). E a rota não abre nenhuma das sete do módulo.
+Quem lê é quem já lia o módulo: administrador humano e técnico da TI. Aqui,
+sem `PAINEL_CONTAS_IDS` — o padrão —, nenhuma conta de serviço passa, nem uma
+com cara de painel de parede: nome não identifica a TV. A conta listada é de
+`test_painel_lembretes.py`. E a rota não abre nenhuma das sete do módulo.
 """
 
 from datetime import date, datetime
 
 import pytest
 from sqlalchemy import text
+
+import main
 
 from app.api.deps import EQUIPE_TI_NEGADA
 from app.api.endpoints import tarefas_recorrentes as tarefas_endpoint
@@ -66,6 +68,12 @@ SETE_ROTAS = [
     ("GET", "/tarefas-recorrentes/801/execucoes", None),
     ("POST", "/tarefas-recorrentes/801/realizar", {"observacao": "pelo painel"}),
 ]
+
+
+@pytest.fixture(autouse=True)
+def sem_painel(monkeypatch):
+    """Só neste módulo: o padrão, sem conta do painel, venha o ambiente com o que vier."""
+    monkeypatch.setattr(main.settings, "PAINEL_CONTAS_IDS", None)
 
 
 @pytest.fixture

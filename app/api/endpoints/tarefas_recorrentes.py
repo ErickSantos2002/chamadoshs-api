@@ -6,7 +6,7 @@ from datetime import datetime, time, timedelta
 
 import logging
 
-from app.api.deps import get_db, require_equipe_ti
+from app.api.deps import get_db, require_equipe_ti, require_leitura_dos_lembretes
 from app.models.tarefa_recorrente import TarefaRecorrente, TarefaRecorrenteExecucao
 from app.models.usuario import Usuario
 from app.schemas.tarefa_recorrente import (
@@ -90,7 +90,7 @@ def listar_tarefas(
 
 @router.get("/lembretes-do-dia", response_model=LembretesDoDiaResponse)
 def lembretes_do_dia(
-    _equipe_ti: Usuario = Depends(require_equipe_ti),
+    _leitor: Usuario = Depends(require_leitura_dos_lembretes),
     db: Session = Depends(get_db),
 ):
     """
@@ -102,12 +102,12 @@ def lembretes_do_dia(
     situação. Nada de descrição, instruções, responsável ou execuções. Ordem
     estável: próxima data, depois id. Só lê.
 
-    Quem lê é quem lê o módulo: administrador humano e técnico da TI
-    (`require_equipe_ti`). Nenhuma conta de serviço passa — nem a do painel de
-    parede. Liberar o painel exige identificar a conta da TV de um jeito que
-    não seja nome, perfil, `conta_de_servico`, IP, User-Agent nem parâmetro do
-    cliente, e esse mecanismo não existe ainda (ver docs/contas-de-servico.md).
-    Esta rota não abre nenhuma das sete rotas do módulo.
+    Quem lê é quem lê o módulo — administrador humano e técnico da TI
+    (`require_equipe_ti`) — e a conta do painel de parede: de serviço, ativa e
+    com o id em `PAINEL_CONTAS_IDS` (`require_leitura_dos_lembretes`). Nome,
+    perfil, `conta_de_servico` sozinho, IP, User-Agent e parâmetro do cliente
+    não identificam a TV. Esta rota não abre nenhuma das sete rotas do módulo,
+    nem para o painel (ver docs/contas-de-servico.md).
     """
     hoje = _hoje()
     inicio, fim = datetime.combine(hoje, time.min), datetime.combine(hoje + timedelta(days=1), time.min)

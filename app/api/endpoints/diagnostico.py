@@ -26,7 +26,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from app.api.deps import get_db, is_admin, is_staff
+from app.api.deps import get_db, is_admin, is_conta_do_painel, is_staff
 from app.core.config import settings
 from app.models.setor import Setor
 from app.models.usuario import Usuario
@@ -145,7 +145,52 @@ def diagnostico_geral(db: Session = Depends(get_db)):
         diagnostico["equipes"] = {"erro": "❌ ERRO ao consultar (detalhe no log da aplicação)"}
         diagnostico["status"] = "erro"
 
+    try:
+        # 11. Contas do painel (API-11, S1): a mesma conferência, para
+        # PAINEL_CONTAS_IDS contra `usuarios`.
+        diagnostico["painel"] = _diagnostico_do_painel(db)
+    except Exception:
+        logger.error("Diagnóstico: conferência das contas do painel falhou", exc_info=True)
+        diagnostico["painel"] = {"erro": "❌ ERRO ao consultar (detalhe no log da aplicação)"}
+        diagnostico["status"] = "erro"
+
     return diagnostico
+
+
+def _diagnostico_do_painel(db: Session) -> dict:
+    """
+    `PAINEL_CONTAS_IDS` contra o cadastro: quais ids leem os lembretes agora
+    e por que os outros não leem. Só ids — nem nome, nem perfil, nem setor:
+    reconhecer qual conta é a TV é dos SELECTs de docs/contas-de-servico.md.
+    """
+    lidos = settings.painel_contas
+    contas = {u.id: u for u in db.query(Usuario).filter(Usuario.id.in_(lidos.ids)).all()} if lidos.ids else {}
+    inexistentes = sorted(i for i in lidos.ids if i not in contas)
+    inativas = sorted(i for i, u in contas.items() if u.ativo is not True)
+    humanas = sorted(i for i, u in contas.items() if u.conta_de_servico is not True)
+    autorizadas = sorted(i for i, u in contas.items() if is_conta_do_painel(u))
+
+    alertas = []
+    if lidos.estado != "valida":
+        alertas.append(f"⚠️ PAINEL_CONTAS_IDS {lidos.estado}: nenhuma conta lê os lembretes como painel")
+    if inexistentes:
+        alertas.append(f"⚠️ PAINEL_CONTAS_IDS cita usuário(s) inexistente(s): {inexistentes}")
+    if inativas:
+        alertas.append(f"⚠️ PAINEL_CONTAS_IDS cita conta(s) inativa(s), que não leem: {inativas}")
+    if humanas:
+        alertas.append(f"⚠️ PAINEL_CONTAS_IDS cita conta(s) que não são de serviço, que não leem como painel: {humanas}")
+
+    return {
+        "painel_contas_ids": {
+            "estado": lidos.estado,
+            "configurados": sorted(lidos.ids),
+            "autorizadas": autorizadas,
+            "inexistentes": inexistentes,
+            "inativas": inativas,
+            "nao_sao_de_servico": humanas,
+        },
+        "alertas": alertas,
+    }
 
 
 def _diagnostico_das_equipes(db: Session) -> dict:

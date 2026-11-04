@@ -50,6 +50,46 @@ def interpretar_setores_ti(valor: Optional[str]) -> SetoresTI:
     return SetoresTI("valida", frozenset(numeros), duplicados=len(set(numeros)) != len(numeros))
 
 
+class ContasDoPainel(NamedTuple):
+    """
+    `PAINEL_CONTAS_IDS` interpretada, com os mesmos estados de `SetoresTI`.
+    Fora de "valida", `ids` é vazio: nenhuma conta lê como painel.
+    """
+
+    estado: str
+    ids: FrozenSet[int]
+    duplicados: bool = False
+
+
+# Sem zero à esquerda e com até dez dígitos: o teto vem depois, em número.
+_ID_DE_USUARIO = re.compile(r"[1-9][0-9]{0,9}")
+# `usuarios.id` é INTEGER no PostgreSQL.
+_MAIOR_ID_DE_USUARIO = 2_147_483_647
+
+
+def interpretar_painel_contas(valor: Optional[str]) -> ContasDoPainel:
+    """
+    Lê `PAINEL_CONTAS_IDS`: ids de usuário, inteiros positivos, separados por
+    vírgula.
+
+    A mesma regra de `SETORES_TI_IDS` — um item inválido descarta a lista
+    inteira, repetidos são juntados —, e mais estrita no item: zero à
+    esquerda, mais de dez dígitos e id acima do teto do INTEGER também
+    invalidam. O tamanho é conferido antes do `int()`, que recusa texto de
+    milhares de dígitos com exceção e derrubaria a API na subida.
+    """
+    if valor is None:
+        return ContasDoPainel("ausente", frozenset())
+    texto = str(valor).strip()
+    if not texto:
+        return ContasDoPainel("vazia", frozenset())
+    itens = [item.strip() for item in texto.split(",")]
+    if not all(_ID_DE_USUARIO.fullmatch(item) and int(item) <= _MAIOR_ID_DE_USUARIO for item in itens):
+        return ContasDoPainel("invalida", frozenset())
+    numeros = [int(item) for item in itens]
+    return ContasDoPainel("valida", frozenset(numeros), duplicados=len(set(numeros)) != len(numeros))
+
+
 class Settings(BaseSettings):
     # Database
     DATABASE_URL: str
@@ -203,6 +243,46 @@ class Settings(BaseSettings):
                     "SETORES_TI_IDS inclui o setor da Qualidade (%s); ele não vale como TI",
                     self.SETOR_QUALIDADE_ID,
                 )
+        return self
+
+    # Contas do painel de parede (ids em `usuarios`), separadas por vírgula.
+    # Elas leem `GET /tarefas-recorrentes/lembretes-do-dia` e nada mais
+    # (API-11, S1): a TV que mostra o lembrete "tarefas do dia" é uma conta de
+    # serviço, e conta de serviço não lê o módulo de tarefas.
+    #
+    # Só vale para conta ativa e com `conta_de_servico` verdadeiro; um id de
+    # pessoa na lista não muda nada para ela. Sem valor padrão e sem exemplo:
+    # o id da TV sai do inventário do ambiente, não deste arquivo.
+    #
+    # Ausente, vazia ou inválida, nenhuma conta lê como painel. A API sobe
+    # assim mesmo, e o aviso vai para o log. Texto cru, pelo mesmo motivo de
+    # SETORES_TI_IDS.
+    PAINEL_CONTAS_IDS: Optional[str] = None
+
+    @property
+    def painel_contas(self) -> ContasDoPainel:
+        return interpretar_painel_contas(self.PAINEL_CONTAS_IDS)
+
+    @property
+    def painel_contas_ids(self) -> FrozenSet[int]:
+        return self.painel_contas.ids
+
+    @model_validator(mode="after")
+    def _avisar_painel_contas(self):
+        # Só avisa, como em SETORES_TI_IDS. O valor não vai para o log: são
+        # ids, mas quem lê o log não precisa saber quais contas são o painel.
+        lidos = self.painel_contas
+        if lidos.estado == "ausente":
+            logger.warning("PAINEL_CONTAS_IDS não definida: nenhuma conta de serviço lê os lembretes do dia")
+        elif lidos.estado == "vazia":
+            logger.warning("PAINEL_CONTAS_IDS vazia: nenhuma conta de serviço lê os lembretes do dia")
+        elif lidos.estado == "invalida":
+            logger.warning(
+                "PAINEL_CONTAS_IDS não é uma lista de ids de usuário; nenhuma conta de serviço "
+                "lê os lembretes do dia"
+            )
+        elif lidos.duplicados:
+            logger.warning("PAINEL_CONTAS_IDS tem ids repetidos; cada um vale uma vez")
         return self
 
     # CORS
