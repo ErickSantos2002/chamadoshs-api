@@ -30,7 +30,7 @@ existe como defesa.
 | `require_admin`: usuários (criar, editar, senha alheia, perfil, setor, `conta_de_servico`, desativar, reativar, eventos), `POST /auth/registro`, excluir chamado e setor, diagnóstico | 403 de perfil | **403** `"Conta de serviço não executa administração"` (API-11, S3) | 403 de perfil |
 | Ser responsável de chamado da TI | não (API-9) | não | não |
 | Contar como "último administrador ativo" | — | **não** (API-11, S4) | — |
-| `GET /tarefas-recorrentes/lembretes-do-dia` | **403** (API-11, S1) | **403** | 403 |
+| `GET /tarefas-recorrentes/lembretes-do-dia` | **403**; **200 só se o id estiver em `PAINEL_CONTAS_IDS`** (API-11, S1) | idem | idem |
 
 Nas recusas: nada é gravado — nem o chamado, nem a versão, nem o histórico,
 nem webhook. O 404 de quem não lê o chamado vem antes do 403, e o 401/409/428
@@ -46,8 +46,11 @@ seguem como eram.
 | Leitura | `is_admin` (perfil só) e `setores_lidos_pelo_perfil` — inalterados |
 | Último administrador | `_outros_admins_humanos_ativos` e `_garantir_que_resta_admin_humano` (`app/api/endpoints/usuarios.py`) — API-11, S4 |
 | Registro | `UsuarioCreate` de `app/schemas/auth.py` — API-11, S5 |
+| Painel de parede | `interpretar_painel_contas` (`app/core/config.py`), `is_conta_do_painel` e `require_leitura_dos_lembretes` (`app/api/deps.py`) — API-11, S1 |
 
-Nenhuma rota tem exceção por nome, IP, `User-Agent`, parâmetro do cliente ou id.
+Nenhuma rota tem exceção por nome, IP, `User-Agent` ou parâmetro do cliente. A
+única exceção por id é a do painel: uma rota, só leitura, e só para conta de
+serviço ativa — o id sozinho não vale (ver "Painel de parede").
 
 ## Último administrador humano (S4)
 
@@ -86,41 +89,100 @@ item é uma consulta só de leitura ou uma pergunta ao responsável.
 - [ ] **Administradores humanos ativos:** `SELECT id, nome FROM usuarios u JOIN roles r ON r.id = u.role_id WHERE r.nome = 'Administrador' AND u.ativo AND NOT u.conta_de_servico;` — **se der zero, não subir a API-11** antes de executar a recuperação acima: a administração ficaria sem ninguém.
 - [ ] **A conta compartilhada de administração:** quem a usa hoje, para quê, e por onde (FortiPAM?).
 - [ ] **FortiPAM:** quais contas o cofre entrega, a quem, e se alguma pessoa administra por uma conta de serviço.
-- [ ] **A conta da TV:** qual é (id, nome, perfil, setor), em que máquina roda, quem tem a senha.
+- [ ] **A conta da TV:** qual é (id, nome, perfil, setor), em que máquina roda, quem tem a senha — é o id que vai em `PAINEL_CONTAS_IDS` (procedimento em "Painel de parede").
 - [ ] **Integrações:** alguma automação usa a API com conta de serviço? (O n8n hoje só recebe webhook.)
 - [ ] **n8n com acesso direto ao banco:** se existir, ele escreve fora da API e fora de toda esta regra — conferir credencial e permissões dele no PostgreSQL.
 - [ ] **Versão em produção:** qual imagem da API está no ar (`GET /` / `/health`, ver memória de endereços) e qual front.
 
-## Painel de parede (S1) — bloqueado
+## Painel de parede (S1) — implementado; a TV real pendente
 
 O quadro de chamados do frontend é o painel de parede: atualiza
 `GET /chamados/` a cada 10 minutos e, se `podeAdministrar`, também
 `GET /tarefas-recorrentes/?ativo=true`, para o lembrete "tarefas do dia".
 `GET /usuarios/` roda uma vez, na montagem.
 
-**O que a API-11 entregou:** `GET /tarefas-recorrentes/lembretes-do-dia`, com
-só `id`, `titulo`, `proxima_data` e `situacao` (`atrasada`, `hoje`,
-`realizada_hoje`), o dia de Brasília em `data`, ordem por próxima data e id, só
-leitura. Mesma regra do quadro: tarefas ativas que vencem até hoje e as
-realizadas hoje. Quem lê: administrador humano e técnico da TI. **Nenhuma
-conta de serviço, inclusive a da TV.**
+**A rota:** `GET /tarefas-recorrentes/lembretes-do-dia`, com só `id`,
+`titulo`, `proxima_data` e `situacao` (`atrasada`, `hoje`, `realizada_hoje`),
+o dia de Brasília em `data`, ordem por próxima data e id, só leitura. Mesma
+regra do quadro: tarefas ativas que vencem até hoje e as realizadas hoje.
+Sem parâmetro nenhum.
 
-**Por que bloqueado:** não existe hoje um jeito seguro de dizer "esta conta é
-a TV". Nome, perfil, `conta_de_servico`, IP, `User-Agent`, parâmetro e id
-inventado não servem — qualquer um deles libera mais do que a TV, ou é
-falsificável. Liberar a rota para toda conta de serviço seria a autorização
-genérica que a API-11 proíbe.
+**Quem lê:** administrador humano e técnico da TI (`require_equipe_ti`,
+inalterado), e a **conta do painel** — decisão aprovada: opção A, a lista por
+configuração. As opções B (coluna, com migration) e C (perfil novo) ficaram de
+fora.
 
-**Opções** (cada uma precisa de autorização; nenhuma foi implementada):
+### `PAINEL_CONTAS_IDS`
 
-| | Como | Custo | Falha segura |
-|---|---|---|---|
-| **A. Lista por configuração** (recomendada) | `PAINEL_CONTAS_IDS` no ambiente, com os ids **conferidos no inventário**; a rota aceita a conta se estiver na lista **e** for `conta_de_servico` ativa | Variável nova; sem migration; só esta rota | Vazia por padrão: ninguém |
-| B. Permissão por conta | Coluna `pode_ler_painel` (migration), editável pelo administrador humano, com evento de conta | Migration, front de cadastro, trilha | `false` por padrão |
-| C. Perfil "Painel" | Role nova, só leitura | Mexe em todo `require_roles`, no `roleMapper` do front e nas políticas de leitura | Precisa revisar todas as rotas |
+- **Formato:** ids de `usuarios`, inteiros positivos, separados por vírgula
+  (`<id>` ou `<id>,<id>`); espaços em volta são ignorados, repetidos valem uma
+  vez.
+- **Padrão:** ausente ou vazia — **nenhuma conta lê como painel**. Nenhum id
+  em arquivo versionado; o `.env.example` traz a variável vazia.
+- **Falha segura:** um item inválido descarta **a lista inteira** — texto,
+  zero, negativo, sinal, decimal, zero à esquerda, separador vazio, vírgula
+  no fim, dígito de outro alfabeto, mais de dez dígitos, id acima de
+  2147483647 (o teto do `INTEGER`). `"101,abc"` não deixa o 101 passar: a
+  lista fica quebrada, não meio aplicada. A API sobe assim mesmo.
+- **Aviso:** a subida registra no log quando a variável está ausente, vazia,
+  inválida ou com repetidos — sem escrever os ids.
+- **Quando vale:** lida do ambiente na subida do container. Mudar exige
+  reiniciar a API.
 
-Em qualquer opção a rota continua só leitura e não abre nenhuma das sete
-rotas de tarefas.
+### A regra (`is_conta_do_painel`)
+
+A conta passa como painel se, **ao mesmo tempo**: está autenticada; está
+**ativa**; tem **`conta_de_servico = true`**; e o **id dela** está numa lista
+válida. As três vêm do usuário que `get_current_user` lê do banco pelo `sub`
+do token — nada vem do pedido. Não contam: nome, e-mail, perfil, setor (nem o
+da TI), `conta_de_servico` sozinho, cabeçalho, query, corpo, IP, `User-Agent`,
+nem claim extra no token.
+
+- **Qualquer perfil:** a conta do painel pode ser técnica, administradora ou
+  de perfil Usuário; a lista não lhe dá nenhum poder do perfil que ela não
+  tinha.
+- **Pessoa na lista:** não muda nada. Continua com as permissões de pessoa.
+- **Inativa:** `get_current_user` já recusa (403 `"Usuário inativo"`), e a
+  regra confere `ativo` de novo.
+- **Recusa:** a de sempre, `403 "Requer perfil: Administrador ou Técnico da
+  TI"`, igual para quem está fora da lista, pessoa listada ou lista inválida —
+  a resposta não diz se a conta está na lista.
+
+**Só esta rota.** `require_leitura_dos_lembretes` é usada por ela e por mais
+nenhuma. `require_admin`, `require_equipe_ti`, `integra_equipe_ti`,
+`pode_acessar_comentario_interno`, `pode_alterar_como_equipe` e
+`pode_ser_novo_responsavel` não mudaram: a conta do painel continua com 403
+nas sete rotas do módulo de tarefas, em usuários, setores, categorias, SLA,
+trilha, diagnóstico, responsáveis da TI, comentário interno e nas escritas de
+equipe, e `/auth/me` continua dizendo `integra_equipe_ti: false`.
+
+### Identificar e validar a conta da TV (antes do deploy; não executado)
+
+1. **Achar a conta** que a TV usa — com quem cuida da TV, não pelo nome: entrar
+   na máquina da TV, ver qual usuário está logado no front.
+2. **Conferir no banco, só leitura**, pelo id que a pessoa informou:
+   `SELECT u.id, r.nome AS perfil, u.setor_id, u.ativo, u.conta_de_servico FROM usuarios u JOIN roles r ON r.id = u.role_id WHERE u.id = <id>;`
+   Esperado: `ativo = true` e `conta_de_servico = true`. Se a conta não for de
+   serviço, **não** marcá-la por aqui: é decisão humana, por `PUT /usuarios/`
+   com administrador humano (fica evento).
+3. **Registrar no registro de mudança** o id, quem confirmou e quando.
+4. **Configurar** `PAINEL_CONTAS_IDS=<id>` no Easypanel (env var da API) e
+   reiniciar.
+5. **Conferir pelo diagnóstico** (`GET /api/v1/diagnostico/`, administrador
+   humano): a seção `painel` mostra `estado: "valida"` e o id em
+   `autorizadas`, e nenhum em `inexistentes`, `inativas` ou
+   `nao_sao_de_servico`. Ela devolve só ids — nem nome, nem perfil, nem setor.
+6. **Conferir o efeito pela própria TV**, sem copiar o token dela: na tela, o
+   lembrete aparece (depois do FE novo); no log de acesso do proxy, o pedido
+   à rota sai 200 e os de `/tarefas-recorrentes/` continuam 403.
+
+Os ids dos testes (70 a 79) são do banco de teste e nunca vão para produção.
+
+### Frontend
+
+Configurar a variável **não traz o lembrete de volta**: o FE-5 ainda pede
+`GET /tarefas-recorrentes/?ativo=true`, que continua 403 para a TV. É preciso
+um FE novo (não iniciado; ver abaixo).
 
 ## Dependência do FE-5 (sem mudar o frontend)
 
@@ -132,10 +194,14 @@ rotas de tarefas.
   403 — o lembrete some e a tela pode mostrar o aviso de erro a cada ciclo. O
   menu de administração também aparece e devolve 403 em tudo.
 - **O que o front precisa (FE futuro, não iniciado):** o lembrete passar a usar
-  `lembretes-do-dia` sem depender de `podeAdministrar`, tratar o 403 dela em
-  silêncio (sem toast), e esconder a administração de conta de serviço — o
-  `/auth/me` não diz hoje se a conta é de serviço; seria preciso expor isso,
-  ou um `pode_administrar` calculado pela API.
+  `lembretes-do-dia` sem depender de `podeAdministrar` e deixar de pedir
+  `GET /tarefas-recorrentes/`; comparar com o `data` da resposta, e não com o
+  dia do navegador; tratar o 403 dela em silêncio (sem toast) — é o que toda
+  conta fora da lista recebe —; e esconder a administração de conta de
+  serviço. O `/auth/me` não diz hoje se a conta é de serviço nem se é do
+  painel; seria preciso expor isso, ou um `pode_administrar` calculado pela
+  API. O contrato da rota está fixado em teste
+  (`TestContratoParaOQuadro`, pelo OpenAPI).
 
 ## Plano de migração nominativa (não executado)
 
@@ -175,8 +241,16 @@ nada foi feito, e nenhuma conta real foi alterada.
   evento. Fora do escopo (S6).
 - **SQL direto** (n8n, DBeaver, recuperação) passa por fora de toda a regra e
   não grava evento.
-- **O lembrete do dia some na TV** até haver decisão sobre a identidade dela
-  e um FE que use a rota nova.
+- **O lembrete do dia some na TV** até o id dela ser conferido e configurado
+  e haver um FE que use a rota nova.
+- **A lista é tão boa quanto o inventário.** Um id errado de conta de serviço
+  dá a ela a leitura dos títulos das tarefas do dia — e só isso. Quem tem a
+  senha da TV lê esses títulos de qualquer máquina: a TV não tem identidade de
+  dispositivo, só de conta.
+- **`SETORES_TI_IDS` com milhares de dígitos derruba a subida** (o `int()` do
+  Python recusa texto acima de 4300 dígitos com exceção). Achado da S1, de
+  antes dela (API-6), não corrigido aqui; `PAINEL_CONTAS_IDS` confere o
+  tamanho antes e não tem o problema.
 - **Banco sem administrador humano** fica sem administração pela API até a
   recuperação manual.
 
@@ -189,3 +263,10 @@ a alterar chamados como equipe, a conta compartilhada volta a contar como
 último administrador, `/auth/registro` volta a ignorar `conta_de_servico`
 calado, e a rota `lembretes-do-dia` sai (o FE-5 não a usa, então nada quebra
 na tela).
+
+**Só a liberação da TV:** voltar à imagem da API-11 anterior à S1 completa
+(`fea8f7e`), ou simplesmente esvaziar `PAINEL_CONTAS_IDS` e reiniciar — o
+efeito é o mesmo na autorização, sem trocar imagem. A TV perde a leitura dos
+lembretes; nada no banco a desfazer. Se já houver um FE que use a rota, ele
+passa a receber 403 nela e precisa tratá-lo em silêncio: subir e voltar
+backend e frontend juntos.

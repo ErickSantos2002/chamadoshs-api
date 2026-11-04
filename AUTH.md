@@ -304,7 +304,7 @@ banco fica como estava. Sem `SETORES_TI_IDS` válida, só o administrador.
 | Escrita de categoria | sim | sim | 403 | 403 |
 | `PUT /sla-configs/{prioridade}` | sim | sim | 403 | 403 |
 | `/tarefas-recorrentes` (todas) | sim | sim | 403 | 403 |
-| `GET /tarefas-recorrentes/lembretes-do-dia` (API-11) | sim | sim | 403 | 403 |
+| `GET /tarefas-recorrentes/lembretes-do-dia` (API-11) | sim | sim | 403 | 403 (a conta do painel, só esta rota: ver abaixo) |
 | `GET /eventos/` | todos os alvos | só setor | 403 | 403 |
 | `GET /chamados/responsaveis-ti` (API-9) | sim | sim | 403 | 403 |
 
@@ -337,9 +337,16 @@ equipe"`, nada gravado — nem versão, nem histórico, nem webhook. Continua: l
 abrir chamado próprio (sem `solicitante_id` de outro), comentar em público,
 avaliar e cancelar o que a própria conta abriu, e trocar a própria senha.
 
-O painel de parede é uma conta de serviço, e por isso a rota
-`lembretes-do-dia` também a recusa: não há ainda um jeito seguro de
-identificar a TV (dependência registrada no documento acima).
+**Conta do painel (API-11, S1):** o painel de parede é uma conta de serviço,
+e a única exceção que ela tem é ler `GET /tarefas-recorrentes/lembretes-do-dia`
+quando o id dela está em `PAINEL_CONTAS_IDS` (`require_leitura_dos_lembretes`,
+usada só por essa rota). Passa se, ao mesmo tempo, a conta é de serviço, está
+ativa e tem o id numa lista válida — tudo lido do banco pelo `sub` do token;
+perfil, setor, nome, cabeçalho, query e claim extra não contam, e um id de
+pessoa na lista não muda nada para ela. Fora disso, a recusa é a de
+`require_equipe_ti`, com o mesmo corpo para todos. A conta do painel continua
+com `integra_equipe_ti: false` e com 403 em toda rota da tabela acima, nas sete
+de tarefas inclusive, qualquer que seja o perfil dela.
 
 **Administrador ou Técnico:** atualizar, arquivar e desarquivar chamados —
 só os do alcance do perfil (API-6, ver "Escrita de chamado pela equipe"), e
@@ -397,6 +404,13 @@ o histórico e os comentários. Decisões D1–D7, aprovadas em 29/10/2026:
   — a API sobe e avisa no log. Repetidos valem uma vez; o id da Qualidade
   nunca vale como TI. Os ids saem do cadastro real, por
   `diagnosticos/api6_setores_ti.sql` e validação humana.
+- **`PAINEL_CONTAS_IDS`** (API-11, S1): ids de usuário separados por vírgula,
+  vazia por padrão — ninguém lê como painel. Um item inválido (texto, zero,
+  negativo, separador vazio, zero à esquerda, mais de dez dígitos, acima de
+  2147483647) descarta a lista inteira; a API sobe e avisa no log, sem
+  escrever os ids. O id da TV sai do inventário (procedimento em
+  [docs/contas-de-servico.md](docs/contas-de-servico.md)); o diagnóstico
+  confere a lista contra o cadastro, só com ids.
 - **Sem `SETOR_QUALIDADE_ID`** (Qualidade desligada, como em produção hoje),
   ninguém é técnico da Qualidade — e o técnico do setor que seria dela não
   vira TI por isso.

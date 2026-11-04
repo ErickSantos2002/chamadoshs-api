@@ -53,6 +53,10 @@ consulta de cada uma.
 administradores humanos ativos; **com zero, não subir** — a administração
 ficaria sem ninguém. Inventário, recuperação e plano de migração das contas
 compartilhadas: [docs/contas-de-servico.md](docs/contas-de-servico.md).
+`PAINEL_CONTAS_IDS` pode subir vazia (ninguém lê como painel); preenchê-la só
+com o id da TV conferido pelo procedimento do documento, e conferir depois em
+`GET /api/v1/diagnostico/`, seção `painel`. Ela sozinha não traz o lembrete de
+volta à TV: falta o FE que use a rota.
 
 ## Banco novo x banco existente
 
@@ -289,6 +293,7 @@ Internet
 | API_VERSION | Versão da API | `v1` | ❌ Não (padrão: v1) |
 | API_TITLE | Título da API | `ChamadosHS API` | ❌ Não |
 | API_DESCRIPTION | Descrição da API | `API de chamados...` | ❌ Não |
+| PAINEL_CONTAS_IDS | Contas de serviço do painel de parede que leem os lembretes do dia (API-11) | vazio — o id sai do inventário | ❌ Não (padrão: nenhuma) |
 
 ## Comandos Úteis
 

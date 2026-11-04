@@ -223,6 +223,9 @@ por perfil" e "Leitura de chamado").
   nem cria comentário interno e não recebe chamado da TI, mesmo com perfil
   Técnico num setor da TI. Lê os chamados do alcance do perfil, mas não os
   altera como equipe (API-11)
+- Painel de parede: a conta de serviço da TV, se o id dela estiver em
+  `PAINEL_CONTAS_IDS` (vazia por padrão), lê os lembretes do dia
+  (`GET /tarefas-recorrentes/lembretes-do-dia`) e nada mais (API-11)
 - Gerar relatórios da equipe
 
 ### Usuário

@@ -61,25 +61,41 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   conta humana. `POST /usuarios/` (que tem o campo) e
   `/auth/alterar-senha` não mudam.
 
-  **S1 — lembrete do painel, parcial.** Nova rota
+  **S1 — lembrete do painel.** Nova rota
   `GET /tarefas-recorrentes/lembretes-do-dia`: só `id`, `titulo`,
   `proxima_data` e `situacao` (`atrasada`, `hoje`, `realizada_hoje`), o dia
-  de Brasília em `data`, ordem por próxima data e id, só leitura. Lê quem já
-  lia o módulo: administrador humano e técnico da TI. **Nenhuma conta de
-  serviço passa, nem a da TV:** não existe identidade segura para ela —
-  nome, perfil, `conta_de_servico`, IP, `User-Agent` e parâmetro foram
-  descartados, e liberar para toda conta de serviço seria autorização
-  genérica. As opções (lista de ids por configuração, coluna de permissão,
-  perfil novo) esperam decisão. A rota não abre nenhuma das sete de
-  tarefas. O FE-5 não a usa.
+  de Brasília em `data`, ordem por próxima data e id, só leitura, sem
+  parâmetro. Lê quem já lia o módulo — administrador humano e técnico da
+  TI — e a **conta do painel**: decisão aprovada, a lista por configuração
+  **`PAINEL_CONTAS_IDS`** (ids de usuário separados por vírgula). A conta
+  passa se for de serviço, ativa e com o id numa lista válida — as três
+  lidas do banco pelo `sub` do token. Nome, perfil, setor, `conta_de_servico`
+  sozinho, cabeçalho, query, IP, `User-Agent` e claim extra do token não
+  contam; um id de pessoa na lista não lhe dá nada. **Vazia por padrão:
+  ninguém.** Um item inválido (texto, zero, negativo, separador vazio, zero à
+  esquerda, mais de dez dígitos, acima do teto do `INTEGER`) descarta a lista
+  inteira, e a API sobe assim mesmo, com aviso no log que não escreve os ids.
+  A recusa é a de sempre (403 `"Requer perfil: Administrador ou Técnico da
+  TI"`), igual para todos. `require_leitura_dos_lembretes` é usada só por esta
+  rota: `require_admin`, `require_equipe_ti` e `integra_equipe_ti` não mudam,
+  e a conta do painel segue com 403 nas sete rotas de tarefas, na
+  administração, no interno e nas escritas de equipe. O diagnóstico ganhou a
+  seção `painel`: a lista contra o cadastro, só com ids. O FE-5 não usa a rota.
 
   **Riscos residuais e dependências:**
   - **O lembrete "tarefas do dia" some na TV.** Como técnico de serviço,
     já desde a API-10. Como administrador de serviço, o FE-5 segue pedindo
     `GET /tarefas-recorrentes/?ativo=true` a cada 10 minutos (o
     `podeAdministrar` vem do perfil) e agora recebe 403; o menu de
-    administração aparece e devolve 403. Resolver pede a decisão da S1 e um
-    FE novo (não iniciado).
+    administração aparece e devolve 403. Configurar `PAINEL_CONTAS_IDS` não
+    basta: o lembrete volta só com o id real da TV conferido e um FE novo
+    que use a rota (não iniciado).
+  - **A lista vale o inventário.** Um id errado de conta de serviço dá a ela
+    só os títulos das tarefas do dia; quem tem a senha da TV lê de qualquer
+    máquina (a TV não tem identidade de dispositivo).
+  - **`SETORES_TI_IDS` com milhares de dígitos derruba a subida** (o `int()`
+    recusa texto acima de 4300 dígitos). Achado durante a S1, anterior a ela
+    (API-6), não corrigido; `PAINEL_CONTAS_IDS` não tem o problema.
   - **Sem administrador humano em produção, ninguém administra pela API
     depois do deploy.** Não verificado — ver a ação de deploy.
   - Sem trilha geral de `PUT` de chamado e de exclusão definitiva, e
@@ -103,11 +119,26 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   `GET /eventos/?alvo=usuario` foi para a matriz de administração, e
   `test_conta_de_servico_equipe_ti.py` passou a usar administrador humano.
 
-  Validação local: **8.954 testes únicos, igual à coleta** — 5.760 em
-  SQLite e 3.194 em PostgreSQL 15.19 descartável, serial, em lotes
-  conferidos pelo junit, sem skip, sem repetição. Inclui a matriz de
-  concorrência T1–T14 (63 em PostgreSQL). Sobre os 8.503 da API-10: +479
-  ids novos e 28 que saíram — das classes de pendência de
+  Testes do painel: `test_painel_lembretes.py` (108: a leitura da variável,
+  a matriz de 19 configurações × 20 contas, o que não vira identidade, a
+  resposta só de leitura com o dia de Brasília, o contrato do OpenAPI e o
+  diagnóstico), `test_painel_isolamento.py` (219: com todas as contas de
+  serviço na lista, cada rota proibida continua proibida, e as matrizes de
+  recusa da API-10, da S2, da S3 e da S1 sem lista rodam de novo) e
+  `test_painel_postgres.py` (89, em PostgreSQL). `test_lembretes_do_dia.py`
+  passa a fixar a lista ausente. Prova por mutação: sem a marca de serviço
+  falham 12; sem o `ativo`, 4 (o `get_current_user` já barra o inativo);
+  sem a lista, 50; com a lista aproveitando os itens válidos, 34; a
+  dependência na listagem do módulo, 13; o painel dentro de
+  `require_equipe_ti`, 78; a rota de volta só para a equipe, 40.
+
+  Validação local: **9.370 testes únicos, igual à coleta** — 6.087 em
+  SQLite e 3.283 em PostgreSQL 15.19 descartável, sobre o código final
+  (`125170a`), serial, em lotes conferidos pelo junit, sem skip, sem
+  repetição, sem falha. Inclui a matriz de concorrência T1–T14 (63 em
+  PostgreSQL). Sobre os 8.954 da API-11 antes da S1 completa: +416 ids
+  novos (219 + 108 + 89) e nenhum que saiu. Sobre os 8.503 da API-10, a
+  conta anterior: +479 ids novos e 28 que saíram — das classes de pendência de
   `test_conta_de_servico_rotas.py`, 13 em SQLite e 13 em PostgreSQL (12
   renomeados em cada, e o de `alvo=usuario`, absorvido pela matriz de
   administração), e 2 ids de `test_trava_rotas_protegidas.py` que mudaram
@@ -1736,10 +1767,10 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   ela a administração. Avaliar desativar essas contas antes de voltar a
   imagem, ou aceitar o risco por escrito.
 
-- **API-11 (menor privilégio das contas de serviço): sem migration, sem
-  variável nova, sem frontend novo — vem depois da API-10. Implantação
-  bloqueada enquanto a S1 (identidade da TV) e o inventário estiverem
-  pendentes.**
+- **API-11 (menor privilégio das contas de serviço): sem migration, uma
+  variável nova (`PAINEL_CONTAS_IDS`, opcional), sem frontend novo — vem
+  depois da API-10. Implantação bloqueada enquanto o inventário (e, nele, o
+  id real da TV) estiver pendente.**
 
   1. Os passos da API-6 à API-10, acima.
   2. **Antes de subir**, o inventário de
@@ -1754,11 +1785,20 @@ cada versão lista o que precisa ser feito além de subir a imagem.
      administração e o comentário interno; as técnicas, a escrita de
      equipe. Pessoas que administravam por elas precisam da conta
      nominativa antes do deploy. Nenhuma conta é alterada pelo deploy.
-  4. Decidir o que fazer com o painel de parede: o lembrete "tarefas do dia"
-     some (e, se a TV for administradora de serviço, o quadro recebe 403 a
-     cada 10 minutos em `GET /tarefas-recorrentes/`). Aceitar por escrito
-     ou esperar a decisão da S1 e o FE correspondente.
-  5. Depois de subir: a conta de serviço administradora recebe 403
+  4. Painel de parede: o lembrete "tarefas do dia" some (e, se a TV for
+     administradora de serviço, o quadro recebe 403 a cada 10 minutos em
+     `GET /tarefas-recorrentes/`) até haver um FE que use
+     `lembretes-do-dia`. Aceitar por escrito, ou esperar esse FE.
+     **`PAINEL_CONTAS_IDS` pode ficar vazia** (o padrão: ninguém lê como
+     painel). Para preenchê-la, o id da TV sai do procedimento
+     "Identificar e validar a conta da TV" do documento — conta ativa, de
+     serviço, confirmada por quem cuida da TV — e vai na env var da API no
+     Easypanel, com reinício. Nunca os ids dos testes (70 a 79).
+  5. Depois de subir, se a variável foi preenchida: `GET /api/v1/diagnostico/`
+     (administrador humano) mostra `painel.painel_contas_ids.estado: "valida"`
+     e o id em `autorizadas`, nenhum em `inexistentes`, `inativas` ou
+     `nao_sao_de_servico`.
+  6. Depois de subir: a conta de serviço administradora recebe 403
      `"Conta de serviço não executa administração"` em `GET /usuarios/{id}/eventos`
      e continua lendo `GET /chamados/`; uma conta de serviço técnica recebe
      403 `"Conta de serviço não altera chamado como equipe"` num `PUT`;
@@ -1771,7 +1811,11 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   perfil, exclusão de chamado sem evento), a técnica volta a alterar
   chamados como equipe, a conta compartilhada volta a contar como último
   administrador, o registro volta a descartar `conta_de_servico` calado, e
-  a rota `lembretes-do-dia` sai (o FE-5 não a usa).
+  a rota `lembretes-do-dia` sai (o FE-5 não a usa). **Só a liberação da
+  TV:** esvaziar `PAINEL_CONTAS_IDS` e reiniciar tem o mesmo efeito de
+  voltar à imagem anterior à S1 completa (`fea8f7e`), sem trocar imagem; a TV
+  perde os lembretes. Se já houver FE usando a rota, subir e voltar os dois
+  juntos.
 
 - **Antes de ligar a Qualidade: concorrência em PostgreSQL.** A API-4b já
   prova em PostgreSQL local, um caso por rota, que a escrita da Qualidade
