@@ -12,6 +12,34 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Corrigido — concorrência da TI com versão (API-12)
+- **Duas escritas da TI com a mesma versão não passam mais as duas.** Na
+  API-11 o `PUT` da TI conferia `versao_esperada` sem travar a linha: duas
+  requisições ao mesmo tempo conferiam a mesma versão antes de qualquer
+  `UPDATE` e gravavam as duas (12 de 20 rodadas na homologação local do
+  FE-5). Agora, quando a TI manda a versão, o `PUT` e as marcas
+  (`cancelar`, `arquivar`, `desarquivar`) seguem o caminho da Qualidade:
+  `SELECT ... FOR UPDATE`, conferência na linha travada, chamado e histórico
+  num commit só, webhook depois do commit. Uma escrita vence; a outra
+  recebe o 409 de sempre (`versao_desatualizada`, `versao_atual`), sem gravar
+  campo, histórico nem webhook. 25 de 25 rodadas simultâneas em PostgreSQL
+  com exatamente um 200.
+- **Sem versão, a TI segue como antes** — versão opcional, sem trava, vale a
+  última escrita. As ações rápidas, o resolver, o cancelar com motivo,
+  arquivar, desarquivar e a troca de responsável no modal do FE-5 saem sem
+  versão: **a concorrência nesses fluxos não está resolvida** e depende de o
+  front passar a mandar a versão, sem mudança na API. A edição da página
+  (FE-5, T-1) já manda e fica protegida.
+- **Sem mudança** de contrato HTTP, de autorização, de SLA, na Qualidade
+  (428/409/trava iguais, T1–T14 aprovados) ou no banco. Contrato, inventário
+  das escritas, riscos e rollback: [docs/concorrencia-da-ti.md](docs/concorrencia-da-ti.md).
+  Testes: `tests/test_concorrencia_ti_postgres.py` (40, PostgreSQL) e
+  `tests/test_concorrencia_ti.py` (8, SQLite).
+
+  **Ação no deploy:** nenhuma além da imagem. Sem migration nem variável;
+  sem ordem com o front (o FE-5 funciona com a API-11 e com a API-12).
+  Rollback: a imagem da API-11.
+
 ### Segurança — menor privilégio das contas de serviço (API-11)
 - **Decisões S1–S6 (auditoria pós-API-10):** conta de serviço lê o que o
   perfil deixa e não age como equipe nem como administrador. A API-10 tirou
