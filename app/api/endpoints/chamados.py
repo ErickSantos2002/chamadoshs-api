@@ -516,10 +516,11 @@ def atualizar_chamado(
     com a versão travada (409), e chamado e histórico saem num commit só. Sem
     webhook, como sempre.
 
-    TI: o fluxo de antes, sem trava. `versao_esperada` é opcional e, se vier,
-    é conferida — mas sem o lock a conferência não impede uma escrita que
-    entre entre ela e o UPDATE. Na TI é só um aviso de dado velho, não
-    controle de concorrência.
+    TI: `versao_esperada` é opcional. Se vier (API-12), o caminho é o da
+    Qualidade — trava, relê, confere e grava chamado e histórico num commit
+    só —, e de duas escritas simultâneas com a mesma versão só uma passa; o
+    webhook sai depois do commit. Sem ela, o fluxo de antes: sem trava, vale
+    a última escrita, e o histórico tem commit próprio.
 
     Só o chamado do alcance da equipe de quem pede (API-6, D8): quem não o
     lê recebe o 404 de um id que não existe, antes da versão (D12); quem o
@@ -531,9 +532,12 @@ def atualizar_chamado(
     chamado = buscar_chamado_alteravel(db, chamado_id, current_user)
 
     # O setor sai da leitura sem trava: o PUT não o altera, e nenhuma rota o
-    # altera depois da criação. A trava fica só para a Qualidade.
+    # altera depois da criação. A trava é da Qualidade e, desde a API-12, da
+    # TI que manda a versão: conferir sem o lock deixava duas escritas com a
+    # mesma versão passarem as duas.
     eh_qualidade = chamado.setor_destino == SetorDestinoEnum.QUALIDADE.value
-    if eh_qualidade:
+    travada = eh_qualidade or chamado_data.versao_esperada is not None
+    if travada:
         # Relê a linha com `SELECT ... FOR UPDATE`: daqui até o commit, ninguém
         # mais escreve nela, e tudo abaixo — versão, responsável atual, status
         # anterior do histórico — é o estado travado, não o da primeira leitura.
@@ -568,7 +572,7 @@ def atualizar_chamado(
                 chamado.data_resolucao
             )
 
-    if eh_qualidade:
+    if travada:
         # Um commit para chamado e histórico, que também solta o lock. Qualquer
         # falha antes dele desfaz os dois: não fica chamado alterado sem o
         # histórico de que o SLA depende, nem histórico de mudança que não houve.
@@ -588,26 +592,28 @@ def atualizar_chamado(
             db.rollback()
             raise
         db.refresh(chamado)
-        return _anexar_sla([chamado], db)[0]
+        if eh_qualidade:
+            return _anexar_sla([chamado], db)[0]
+    else:
+        db.commit()
+        db.refresh(chamado)
 
-    db.commit()
-    db.refresh(chamado)
-
-    # Registrar no histórico se mudou o status
-    if chamado_data.status and status_anterior != chamado_data.status:
-        registrar_historico(
-            db=db,
-            chamado_id=chamado.id,
-            usuario_id=current_user.id,
-            acao="Alteração de status",
-            descricao=f"Status alterado de {status_anterior} para {chamado_data.status.value}",
-            status_anterior=status_anterior,
-            status_novo=chamado_data.status.value
-        )
+        # Registrar no histórico se mudou o status
+        if chamado_data.status and status_anterior != chamado_data.status:
+            registrar_historico(
+                db=db,
+                chamado_id=chamado.id,
+                usuario_id=current_user.id,
+                acao="Alteração de status",
+                descricao=f"Status alterado de {status_anterior} para {chamado_data.status.value}",
+                status_anterior=status_anterior,
+                status_novo=chamado_data.status.value
+            )
 
     # Enviar webhook se o técnico foi atribuído ou alterado. Só TI, como na
-    # abertura: o fluxo do n8n avisa a equipe de TI. (A Qualidade já saiu
-    # acima; o `not eh_qualidade` fica como trava, caso o fluxo mude.)
+    # abertura: o fluxo do n8n avisa a equipe de TI. Sempre depois do commit:
+    # a escrita recusada (409) não chega aqui. (A Qualidade já saiu acima; o
+    # `not eh_qualidade` fica como trava, caso o fluxo mude.)
     if (
         not eh_qualidade
         and chamado_data.tecnico_responsavel_id is not None
@@ -814,33 +820,32 @@ CORPO_DE_MARCA = Body(None)
 
 def _travar_e_conferir_marca(db: Session, chamado: Chamado, corpo: Optional[ChamadoMarca]) -> bool:
     """
-    Pré-condição das marcas (API-4b). Devolve se o chamado é da Qualidade.
+    Pré-condição das marcas (API-4b). Devolve se a linha foi travada.
 
-    Qualidade: trava e relê a linha, e exige a versão (428/409). TI: sem
-    trava, versão opcional e conferida se vier — como no PUT, sem o lock isso
-    é aviso de dado velho, não controle de concorrência. Chamar depois da
-    autorização e antes das recusas de estado ("já está cancelado"), que
-    passam a ler a linha travada.
+    Qualidade: trava e relê a linha, e exige a versão (428/409). TI: versão
+    opcional; se vier, trava e confere como a Qualidade (API-12, como no
+    PUT); sem ela, sem trava, como antes. Chamar depois da autorização e
+    antes das recusas de estado ("já está cancelado"), que passam a ler a
+    linha travada.
     """
     eh_qualidade = chamado.setor_destino == SetorDestinoEnum.QUALIDADE.value
-    if eh_qualidade:
+    esperada = corpo.versao_esperada if corpo is not None else None
+    travada = eh_qualidade or esperada is not None
+    if travada:
         db.refresh(chamado, with_for_update=True)
-    conferir_versao(
-        chamado,
-        corpo.versao_esperada if corpo is not None else None,
-        obrigatoria=eh_qualidade,
-    )
-    return eh_qualidade
+    conferir_versao(chamado, esperada, obrigatoria=eh_qualidade)
+    return travada
 
 
-def _gravar_marca(db: Session, chamado: Chamado, eh_qualidade: bool, usuario_id: int, acao: str, descricao: str):
+def _gravar_marca(db: Session, chamado: Chamado, travada: bool, usuario_id: int, acao: str, descricao: str):
     """
     Grava a marca já posta no chamado, e o histórico dela.
 
-    Qualidade: num commit só, que solta o lock; falha desfaz os dois. TI: o
-    de antes — commit do chamado, depois o do histórico.
+    Linha travada (Qualidade, ou TI com versão): num commit só, que solta o
+    lock; falha desfaz os dois. TI sem versão: o de antes — commit do
+    chamado, depois o do histórico.
     """
-    if eh_qualidade:
+    if travada:
         try:
             adicionar_historico(db=db, chamado_id=chamado.id, usuario_id=usuario_id, acao=acao, descricao=descricao)
             db.commit()
@@ -887,14 +892,14 @@ def cancelar_chamado(
             detail="Só é possível cancelar chamados abertos por você",
         )
 
-    eh_qualidade = _travar_e_conferir_marca(db, chamado, corpo)
+    travada = _travar_e_conferir_marca(db, chamado, corpo)
 
     if chamado.cancelado:
         raise HTTPException(status_code=400, detail="Chamado já está cancelado")
 
     chamado.cancelado = True
     _gravar_marca(
-        db, chamado, eh_qualidade, current_user.id,
+        db, chamado, travada, current_user.id,
         acao="Cancelamento de chamado",
         descricao=f"Chamado #{chamado.protocolo} foi cancelado",
     )
@@ -920,14 +925,14 @@ def arquivar_chamado(
 
     chamado = buscar_chamado_alteravel(db, chamado_id, current_user)
 
-    eh_qualidade = _travar_e_conferir_marca(db, chamado, corpo)
+    travada = _travar_e_conferir_marca(db, chamado, corpo)
 
     if chamado.arquivado:
         raise HTTPException(status_code=400, detail="Chamado já está arquivado")
 
     chamado.arquivado = True
     _gravar_marca(
-        db, chamado, eh_qualidade, current_user.id,
+        db, chamado, travada, current_user.id,
         acao="Arquivamento de chamado",
         descricao=f"Chamado #{chamado.protocolo} foi arquivado",
     )
@@ -953,14 +958,14 @@ def desarquivar_chamado(
 
     chamado = buscar_chamado_alteravel(db, chamado_id, current_user)
 
-    eh_qualidade = _travar_e_conferir_marca(db, chamado, corpo)
+    travada = _travar_e_conferir_marca(db, chamado, corpo)
 
     if not chamado.arquivado:
         raise HTTPException(status_code=400, detail="Chamado não está arquivado")
 
     chamado.arquivado = False
     _gravar_marca(
-        db, chamado, eh_qualidade, current_user.id,
+        db, chamado, travada, current_user.id,
         acao="Desarquivamento de chamado",
         descricao=f"Chamado #{chamado.protocolo} foi desarquivado",
     )
