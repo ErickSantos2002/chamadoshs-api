@@ -1,12 +1,15 @@
 """
-Editar e excluir comentário interno (API-8).
+Editar e excluir comentário interno (API-8, refeita na API-13).
 
 A edição e a exclusão já exigiam ver o comentário hoje (API-6, D11). Ver o
-interno agora é ser administrador ou técnico da TI: quem não é — o técnico
-da Qualidade, o de outro setor, o sem setor, o usuário, ou o técnico da TI
-sem `SETORES_TI_IDS` válida — não edita nem exclui o interno que ele mesmo
-escreveu, e recebe o 404 de um id que não existe. O comentário público de
-quem lê o chamado segue como antes.
+interno é ser administrador humano ou da equipe do setor de destino do
+chamado (API-13): quem não é — o técnico de outro setor, o sem setor, o
+usuário, o técnico da TI sem `SETORES_TI_IDS` válida, ou o técnico de uma
+equipe num chamado do outro setor que ele lê pelo vínculo — não edita nem
+exclui o interno que ele mesmo escreveu, e recebe o 404 de um id que não
+existe. O comentário público de quem lê o chamado segue como antes. Até a
+API-12 a regra era só do perfil, e o técnico da Qualidade estava entre os que
+não podiam.
 
 A edição também não muda a visibilidade por fora da regra: só quem pode o
 interno torna interno um comentário público, e quem não pode nem chega ao
@@ -17,6 +20,7 @@ sempre.
 import pytest
 
 from app.api.endpoints.comentarios import MARCAR_INTERNO_NEGADO
+from app.models import Chamado
 from app.models.comentario import ComentarioChamado
 from leitura_cenario import CHAMADOS, comentario_interno  # noqa: F401
 from test_comentarios_internos import (  # noqa: F401
@@ -39,16 +43,31 @@ from test_comentarios_internos import (  # noqa: F401
 COM_LEITURA = [quem for quem in PERFIS if quem not in SEM_LEITURA]
 TIPOS = {"publico": False, "interno": True}
 
+# O `ALVO` do técnico da TI é um chamado da Qualidade que ele lê pelo vínculo,
+# e desde a API-13 o interno dele ali nunca é dele. Para que a matriz continue
+# provando o interno do técnico da TI — e a perda dele sem lista válida —, o
+# comentário dele vai num chamado da TI que ele mesmo abriu: lê pelo vínculo
+# em qualquer configuração, e o interno depende só da lista.
+TI_DO_TECNICO_TI = 130
+ALVO_DA_EDICAO = {**ALVO, "tecnico_ti": "ti_do_tecnico_ti"}
+CHAMADOS_DA_EDICAO = {**TODOS_OS_CHAMADOS, "ti_do_tecnico_ti": TI_DO_TECNICO_TI}
+
 
 @pytest.fixture
 def proprios(internos, sessao):
-    """Um comentário público e um interno de cada perfil, no chamado do `ALVO` dele."""
+    """Um comentário público e um interno de cada perfil, no chamado do `ALVO_DA_EDICAO` dele."""
+    sessao.add(Chamado(
+        id=TI_DO_TECNICO_TI, protocolo=f"CH-TESTE-{TI_DO_TECNICO_TI}", solicitante_id=internos["tecnico_ti"],
+        categoria_id=1, titulo="Chamado ti_do_tecnico_ti", descricao="Descrição do chamado ti_do_tecnico_ti",
+        status="Aberto", prioridade="Média", setor_destino="TI",
+    ))
+    sessao.flush()
     ids = {}
     for n, quem in enumerate(PERFIS):
         for m, (tipo, interno) in enumerate(TIPOS.items()):
             cid = 8000 + 2 * n + m
             sessao.add(ComentarioChamado(
-                id=cid, chamado_id=TODOS_OS_CHAMADOS[ALVO[quem]], usuario_id=internos[quem],
+                id=cid, chamado_id=CHAMADOS_DA_EDICAO[ALVO_DA_EDICAO[quem]], usuario_id=internos[quem],
                 comentario=f"Escrito por {quem}", is_interno=interno,
             ))
             ids[(quem, tipo)] = cid
@@ -80,7 +99,7 @@ def test_o_proprio_comentario(cliente, sessao, como, configurar, saidas, proprio
     antes = _foto(sessao)
     resposta = _agir(cliente, como, quem, acao, cid)
 
-    if tipo == "publico" or pode_o_interno(quem, configuracao):
+    if tipo == "publico" or pode_o_interno(quem, configuracao, ALVO_DA_EDICAO[quem]):
         assert resposta.status_code == (200 if acao == "PUT" else 204), resposta.text
         assert _estado(sessao, cid) == (None if acao == "DELETE" else ("Revisado na matriz", TIPOS[tipo]))
     else:
@@ -103,7 +122,9 @@ def test_autor_sem_acesso_ao_chamado(cliente, sessao, como, proprios, quem, tipo
     assert _foto(sessao) == antes
 
 
-SEM_O_INTERNO = ["tecnico_qualidade", "tecnico_outro_setor", "tecnico_sem_setor", "solicitante", "atendente", "perfil_desconhecido"]
+# Desde a API-13 o técnico da Qualidade sai daqui: o comentário dele é num
+# chamado da Qualidade, e ali o interno é dele.
+SEM_O_INTERNO = ["tecnico_outro_setor", "tecnico_sem_setor", "solicitante", "atendente", "perfil_desconhecido"]
 
 
 class TestVisibilidade:
@@ -138,7 +159,7 @@ class TestVisibilidade:
         assert _estado(sessao, cid) == ("Escrito por tecnico_ti", False)
 
     @pytest.mark.parametrize("de,para", [(False, True), (True, False)], ids=["publico_para_interno", "interno_para_publico"])
-    @pytest.mark.parametrize("quem", ["tecnico_ti", "admin", "admin_da_qualidade"])
+    @pytest.mark.parametrize("quem", ["tecnico_ti", "tecnico_qualidade", "admin", "admin_da_qualidade"])
     def test_quem_pode_muda_a_visibilidade_do_proprio(self, cliente, sessao, como, proprios, quem, de, para):
         cid = proprios[(quem, "interno" if de else "publico")]
         r = _agir(cliente, como, quem, "PUT", cid, {"is_interno": para})
@@ -175,16 +196,24 @@ class TestPoderesDeSempre:
         assert r.status_code == (200 if acao == "PUT" else 204), r.text
 
     @pytest.mark.parametrize("acao", ["PUT", "DELETE"])
-    def test_tecnico_da_ti_nao_mexe_no_interno_alheio(self, cliente, sessao, como, proprios, acao):
+    @pytest.mark.parametrize(
+        "quem,autor",
+        # O interno de cada administrador está num chamado de um setor: o do
+        # `admin_da_qualidade`, na TI; o do `admin`, na Qualidade (API-13).
+        [("tecnico_ti", "admin_da_qualidade"), ("tecnico_qualidade", "admin")],
+    )
+    def test_tecnico_da_equipe_nao_mexe_no_interno_alheio(self, cliente, sessao, como, proprios, quem, autor, acao):
         """Ver o interno não dá autoria: o 403 de sempre."""
-        cid = proprios[("admin", "interno")]
+        cid = proprios[(autor, "interno")]
+        assert cliente.get(f"{API}/comentarios/{cid}", headers=como(quem)).status_code == 200
         antes = _foto(sessao)
-        r = _agir(cliente, como, "tecnico_ti", acao, cid)
+        r = _agir(cliente, como, quem, acao, cid)
         assert r.status_code == 403
         assert r.json()["detail"].startswith("Só é possível")
         assert _foto(sessao) == antes
 
     def test_autor_que_perde_a_permissao_por_troca_de_setor(self, cliente, sessao, como, internos, proprios):
+        """Vai para a Qualidade: continua lendo o chamado da TI que abriu, e o interno dele ali é da TI."""
         from app.models import Usuario
 
         cid = proprios[("tecnico_ti", "interno")]

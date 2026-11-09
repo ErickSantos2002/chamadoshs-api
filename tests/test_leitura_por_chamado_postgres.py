@@ -28,7 +28,10 @@ from test_comentarios_por_chamado import (  # noqa: F401
     test_ex_responsavel_perde_os_comentarios,
     test_leitura_dos_comentarios,
     test_tecnico_da_qualidade_nao_le_interno_da_ti,
-    test_tecnico_ti_le_interno_da_qualidade,
+    # API-13: os dois de baixo substituem o `test_tecnico_ti_le_interno_da_qualidade`.
+    test_tecnico_qualidade_le_interno_da_qualidade,
+    test_tecnico_ti_nao_le_chamado_da_qualidade,
+    test_vinculo_nao_da_o_interno_do_outro_setor,
 )
 from test_leitura_por_chamado import (  # noqa: F401
     TestContas,

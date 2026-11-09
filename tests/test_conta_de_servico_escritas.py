@@ -20,7 +20,7 @@ from app.models import Chamado
 from app.models.comentario import ComentarioChamado
 from app.models.historico import HistoricoChamado
 from app.services.leitura_service import CONTA_DE_SERVICO_NAO_ALTERA, FORA_DA_EQUIPE
-from leitura_cenario import CHAMADOS, cenario_de_leitura  # noqa: F401
+from leitura_cenario import CHAMADOS, DA_TI, cenario_de_leitura  # noqa: F401
 from test_conta_de_servico_rotas import SERVICOS, como, configurar, saidas, servicos  # noqa: F401
 
 API = "/api/v1"
@@ -45,7 +45,8 @@ ESCRITAS_DE_EQUIPE = {
 
 # Quem lê o quê, entre as contas de serviço (perfil e vínculo do cenário).
 LEITURA_DO_SERVICO = {
-    "servico_tecnico_ti": set(CHAMADOS.values()),  # TI e Qualidade, pelo perfil
+    # A TI, pelo perfil (API-13; até a API-12, TI e Qualidade).
+    "servico_tecnico_ti": {CHAMADOS[n] for n in DA_TI},
     "servico_admin_ti": set(CHAMADOS.values()),  # todos, pelo perfil
     "servico_tecnico_qualidade": {101, 103},  # a Qualidade, pelo perfil
     "servico_tecnico_outro": {ARQUIVADO},  # responsável atual do 102
@@ -130,7 +131,9 @@ class TestOQueContinua:
         h = como("servico_tecnico_ti")
         ids = {c["id"] for c in cliente.get(f"{API}/chamados/?incluir_arquivados=true&incluir_cancelados=true",
                                            headers=h).json()}
-        assert set(CHAMADOS.values()) <= ids
+        # API-13: a TI inteira e nada da Qualidade, como o técnico humano da TI.
+        assert {CHAMADOS[n] for n in DA_TI} <= ids
+        assert CHAMADO_Q not in ids
         assert cliente.get(f"{API}/chamados/{CHAMADO_TI}", headers=h).status_code == 200
         assert cliente.get(f"{API}/historico/chamado/{CHAMADO_TI}", headers=h).status_code == 200
 
@@ -173,14 +176,32 @@ class TestOQueContinua:
             assert (resposta.status_code, resposta.json()) == (403, {"detail": CONTA_DE_SERVICO_NAO_ALTERA})
 
 
+# A equipe humana de cada escrita: o administrador em todas; o técnico da TI
+# nas da TI; o da Qualidade na da Qualidade (API-13 — até a API-12 o técnico
+# da TI fazia também a da Qualidade).
+EQUIPE_HUMANA = (
+    [("admin", chave) for chave in sorted(ESCRITAS_DE_EQUIPE)]
+    + [("tecnico_ti", chave) for chave in sorted(ESCRITAS_DE_EQUIPE) if chave != "put_qualidade"]
+    + [("tecnico_qualidade", "put_qualidade")]
+)
+
+
 @pytest.mark.usefixtures("configurar", "saidas")
 class TestPessoasNaoMudam:
-    @pytest.mark.parametrize("chave", sorted(ESCRITAS_DE_EQUIPE))
-    @pytest.mark.parametrize("quem", ["admin", "tecnico_ti"])
+    @pytest.mark.parametrize("quem,chave", EQUIPE_HUMANA)
     def test_equipe_humana_continua_escrevendo(self, cliente, como, quem, chave):
         metodo, rota, corpo = ESCRITAS_DE_EQUIPE[chave]
         resposta = _pedir(cliente, metodo, rota, corpo, como(quem))
         assert resposta.status_code == 200, (resposta.status_code, resposta.text)
+
+    def test_tecnico_da_ti_nao_escreve_na_qualidade(self, cliente, como, sessao, webhooks):
+        """API-13: nem lê o chamado da Qualidade — o 404 de um que não existe."""
+        metodo, rota, corpo = ESCRITAS_DE_EQUIPE["put_qualidade"]
+        antes = _foto(sessao)
+        resposta = _pedir(cliente, metodo, rota, corpo, como("tecnico_ti"))
+        assert (resposta.status_code, resposta.json()) == (404, {"detail": "Chamado não encontrado"})
+        assert _foto(sessao) == antes
+        assert webhooks == []
 
     def test_reatribuir_dispara_o_webhook(self, cliente, como, webhooks):
         resposta = cliente.put(f"{API}/chamados/{CHAMADO_TI}", headers=como("tecnico_ti"),

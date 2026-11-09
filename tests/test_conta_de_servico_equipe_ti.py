@@ -11,6 +11,8 @@ Aqui, a regra escrita à mão — e não derivada do código — conferida contr
 quatro funções que dependem dela, conta × configuração. O perfil de
 administrador não é assunto da C1: o administrador passa pelo perfil — e,
 desde a API-11 (S3), só o humano; a conta de serviço administradora não.
+O comentário interno, desde a API-13, também depende do setor de destino do
+chamado: é conferido num chamado da TI e num da Qualidade.
 """
 
 import pytest
@@ -18,7 +20,7 @@ from fastapi import HTTPException
 
 import main
 from app.api.deps import EQUIPE_TI_NEGADA, require_equipe_ti
-from app.models import Role, Usuario
+from app.models import Chamado, Role, Usuario
 from app.services.leitura_service import integra_equipe_ti, pode_acessar_comentario_interno
 from app.services.responsavel_ti_service import CONTA_DE_SERVICO, motivo_de_recusa, pode_ser_novo_responsavel
 
@@ -56,7 +58,12 @@ CONFIGURACOES = {
 }
 
 EQUIPE = {"Administrador", "Tecnico"}
+SETORES_DESTINO = ["TI", "QUALIDADE"]
 _PADRAO = object()
+
+
+def _chamado(setor_destino):
+    return Chamado(id=1, setor_destino=setor_destino, solicitante_id=99, tecnico_responsavel_id=None)
 
 
 def _conta(nome, conta_de_servico=_PADRAO):
@@ -77,6 +84,19 @@ def _integra_esperado(nome, configuracao):
     """A regra C1, à mão: pessoa, perfil de equipe, setor da TI."""
     perfil, setor, servico, _ = CONTAS[nome]
     return (not servico) and perfil in EQUIPE and setor in CONFIGURACOES[configuracao][1]
+
+
+def _interno_esperado(nome, configuracao, setor_destino):
+    """
+    A regra do interno (API-13), à mão: administrador humano; na TI, quem
+    integra; na Qualidade, o técnico humano do setor da Qualidade.
+    """
+    perfil, setor, servico, _ = CONTAS[nome]
+    if _admin_humano(nome):
+        return True
+    if setor_destino == "TI":
+        return _integra_esperado(nome, configuracao)
+    return (not servico) and perfil == "Tecnico" and setor == SETOR_QUALIDADE
 
 
 @pytest.fixture
@@ -116,12 +136,14 @@ def test_require_equipe_ti(configurar, nome, configuracao):
         assert (recusa.value.status_code, recusa.value.detail) == (403, EQUIPE_TI_NEGADA)
 
 
+@pytest.mark.parametrize("setor_destino", SETORES_DESTINO)
 @pytest.mark.parametrize("configuracao", CONFIGURACOES)
 @pytest.mark.parametrize("nome", CONTAS)
-def test_comentario_interno(configurar, nome, configuracao):
+def test_comentario_interno(configurar, nome, configuracao, setor_destino):
+    """Conta de serviço não vê interno em nenhum dos dois setores (API-10, API-11, API-13)."""
     configurar(configuracao)
-    esperado = _admin_humano(nome) or _integra_esperado(nome, configuracao)
-    assert pode_acessar_comentario_interno(_conta(nome)) is esperado
+    esperado = _interno_esperado(nome, configuracao, setor_destino)
+    assert pode_acessar_comentario_interno(_conta(nome), _chamado(setor_destino)) is esperado
 
 
 @pytest.mark.parametrize("configuracao", CONFIGURACOES)
@@ -142,8 +164,13 @@ def test_marcar_como_servico_nunca_concede(configurar, nome, configuracao):
     """A mesma conta, marcada como de serviço, não ganha nada — só pode perder."""
     configurar(configuracao)
     pessoa, servico = _conta(nome), _conta(nome, conta_de_servico=True)
-    for regra in (integra_equipe_ti, pode_acessar_comentario_interno, pode_ser_novo_responsavel):
+    for regra in (integra_equipe_ti, pode_ser_novo_responsavel):
         assert not (regra(servico) and not regra(pessoa)), regra.__name__
+    for setor_destino in SETORES_DESTINO:
+        chamado = _chamado(setor_destino)
+        assert not (
+            pode_acessar_comentario_interno(servico, chamado) and not pode_acessar_comentario_interno(pessoa, chamado)
+        ), setor_destino
 
 
 @pytest.mark.parametrize("valor", [None, 1, "false", "true", 0])

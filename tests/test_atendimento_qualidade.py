@@ -173,11 +173,10 @@ class TestAutorizacao:
     @pytest.mark.parametrize(
         "chave, nome, role",
         [
-            ("tecnico_id", "tecnico.teste", "Tecnico"),
             ("admin_id", "admin.teste", "Administrador"),
             ("comum_id", "usuario.teste", "Usuario"),
         ],
-        ids=["tecnico-da-ti", "admin-da-ti", "solicitante"],
+        ids=["admin-da-ti", "solicitante"],
     )
     def test_quem_nao_e_da_qualidade_e_403(
         self, cliente, chamado_qualidade, autenticar, intacto, chave, nome, role
@@ -187,6 +186,16 @@ class TestAutorizacao:
 
         assert resposta.status_code == 403
         assert resposta.json()["detail"] == "Você não atende a Qualidade"
+
+    def test_tecnico_da_ti_nem_le_e_e_404(self, cliente, chamado_qualidade, autenticar, intacto):
+        # API-13: o técnico da TI não lê o chamado da Qualidade, e quem não lê
+        # ouve o mesmo de um id que não existe (API-6, D12). Até a API-12 lia
+        # (D1) e recebia o 403 acima.
+        d = chamado_qualidade
+        resposta = _patch(cliente, d["chamado_qualidade_id"], INICIAR, autenticar(d["tecnico_id"], "tecnico.teste", "Tecnico"))
+
+        assert resposta.status_code == 404
+        assert resposta.json() == {"detail": "Chamado não encontrado"}
 
     @pytest.mark.parametrize(
         "chave, nome, role",
@@ -677,13 +686,15 @@ class TestConcorrencia:
         cabecalho_anterior = _atendente(autenticar, d)
         assert _patch(cliente, d["chamado_qualidade_id"], INICIAR, cabecalho_anterior).status_code == 200
 
-        tecnico = autenticar(d["tecnico_id"], "tecnico.teste", "Tecnico")
+        # A equipe da Qualidade reatribui (API-13): até a API-12 este PUT era
+        # do técnico da TI, que hoje nem lê o chamado.
+        equipe = autenticar(d["tecnico_da_qualidade_id"], "bruno.qualidade", "Tecnico")
         reatribuicao = cliente.put(
             f"/api/v1/chamados/{d['chamado_qualidade_id']}",
             json=com_versao_lida(
-                cliente, d["chamado_qualidade_id"], {"tecnico_responsavel_id": d["tecnico_da_qualidade_id"]}, tecnico
+                cliente, d["chamado_qualidade_id"], {"tecnico_responsavel_id": d["tecnico_da_qualidade_id"]}, equipe
             ),
-            headers=tecnico,
+            headers=equipe,
         )
         assert reatribuicao.status_code == 200
 

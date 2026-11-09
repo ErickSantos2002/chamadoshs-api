@@ -185,7 +185,7 @@ class TestRegrasDeSempre:
             json={"comentario": "Agora seria interno", "is_interno": True},
         )
         assert resposta.status_code == 403
-        assert resposta.json() == {"detail": "Apenas administrador ou técnico da TI pode marcar comentário como interno"}
+        assert resposta.json() == {"detail": "Apenas administrador ou a equipe do setor do chamado pode marcar comentário como interno"}
 
     def test_tecnico_marca_o_proprio_como_interno(self, cliente, como, comentarios):
         resposta = cliente.put(

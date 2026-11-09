@@ -3,9 +3,10 @@ Comentários por chamado (API-5, correção do O-1).
 
 Ler os comentários de um chamado — pela lista ou pelo id de um deles — exige
 poder ler o chamado, e a recusa é o mesmo 404 de quando ele não existe (D6).
-Por cima disso, comentário interno só para administrador e técnico da TI
-(API-8; até a API-7, todo perfil de equipe), e a responsável de perfil
-Usuário não o vê (D3).
+Por cima disso, comentário interno só para o administrador humano e para a
+equipe do setor de destino do chamado (API-13; na API-8, administrador e
+técnico da TI em tudo o que liam), e a responsável de perfil Usuário não o
+vê (D3).
 
 Comentar também exige poder ler o chamado, e o chamado tem de existir. Isso
 só fecha: antes qualquer conta comentava em qualquer chamado, e nenhum perfil
@@ -37,7 +38,7 @@ def test_leitura_dos_comentarios(cliente, como, quem, nome):
 
     if nome in LEITURA_ESPERADA[quem]:
         esperados = {comentario_publico(cid)}
-        if quem in VEEM_INTERNO:
+        if nome in VEEM_INTERNO.get(quem, set()):
             esperados.add(comentario_interno(cid))
             assert interno.status_code == 200
         else:
@@ -61,11 +62,27 @@ def test_tecnico_da_qualidade_nao_le_interno_da_ti(cliente, como):
     assert cliente.get(f"{API}/comentarios/chamado/{cid}", headers=h).status_code == 404
 
 
-def test_tecnico_ti_le_interno_da_qualidade(cliente, como):
-    """D1 com a API-8: o técnico da TI vê o interno nos chamados que lê."""
+def test_tecnico_ti_nao_le_chamado_da_qualidade(cliente, como):
+    """API-13: o técnico da TI não lê a Qualidade — nem os comentários, nem o interno."""
     cid = CHAMADOS["q_atribuido"]
-    r = cliente.get(f"{API}/comentarios/chamado/{cid}", headers=como("tecnico_ti"))
+    h = como("tecnico_ti")
+    assert cliente.get(f"{API}/comentarios/chamado/{cid}", headers=h).status_code == 404
+    assert cliente.get(f"{API}/comentarios/{comentario_interno(cid)}", headers=h).status_code == 404
+
+
+def test_tecnico_qualidade_le_interno_da_qualidade(cliente, como):
+    """API-13: a equipe da Qualidade vê o interno dos chamados da Qualidade."""
+    cid = CHAMADOS["q_atribuido"]
+    r = cliente.get(f"{API}/comentarios/chamado/{cid}", headers=como("tecnico_qualidade"))
     assert {c["id"] for c in r.json()} == {comentario_publico(cid), comentario_interno(cid)}
+
+
+def test_vinculo_nao_da_o_interno_do_outro_setor(cliente, como):
+    """API-13: o técnico da Qualidade responsável por um chamado da TI lê o chamado, não o interno."""
+    cid = CHAMADOS["ti_com_tecnico_da_q"]
+    r = cliente.get(f"{API}/comentarios/chamado/{cid}", headers=como("tecnico_qualidade"))
+    assert r.status_code == 200
+    assert {c["id"] for c in r.json()} == {comentario_publico(cid)}
 
 
 def test_ex_responsavel_perde_os_comentarios(cliente, como, autenticar, sessao, cenario_de_leitura):
@@ -138,10 +155,17 @@ class TestComentar:
         assert r.status_code == 404
 
     def test_equipe_continua_comentando_interno_onde_le(self, cliente, como):
+        """API-13: a equipe do setor de destino; até a API-12 este era o técnico da TI na Qualidade."""
+        r = cliente.post(
+            f"{API}/comentarios/",
+            headers=como("tecnico_qualidade"),
+            json={"chamado_id": CHAMADOS["q_atribuido"], "comentario": "Visto pela Qualidade", "is_interno": True},
+        )
+        assert r.status_code == 201
         r = cliente.post(
             f"{API}/comentarios/",
             headers=como("tecnico_ti"),
-            json={"chamado_id": CHAMADOS["q_atribuido"], "comentario": "Visto pela TI", "is_interno": True},
+            json={"chamado_id": CHAMADOS["ti_sem_responsavel"], "comentario": "Visto pela TI", "is_interno": True},
         )
         assert r.status_code == 201
 

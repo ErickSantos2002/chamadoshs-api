@@ -358,6 +358,14 @@ def _validar_corpo_de_criacao(corpo: Any):
         isinstance(corpo, dict)
         and corpo.get("setor_destino") == SetorDestinoEnum.QUALIDADE.value
     )
+    # Transição (API-13): o formulário novo sempre manda o setor escolhido, e
+    # a ausência só vem de cliente antigo — o frontend de antes da 1.8.0, que
+    # continua no ar entre o deploy da API e o do front, e volta num rollback
+    # do front. Por isso ela ainda vale TI, como sempre valeu, e fica no log:
+    # é a contagem que diz quando dá para tornar o campo obrigatório. Valor
+    # presente e inválido segue recusado pela classe da TI (422).
+    if isinstance(corpo, dict) and "setor_destino" not in corpo:
+        logger.warning("criar_chamado sem setor_destino (cliente antigo): gravado como TI")
     modelo = ChamadoCreateQualidade if eh_qualidade else ChamadoCreate
     try:
         return modelo.model_validate(corpo, from_attributes=True)

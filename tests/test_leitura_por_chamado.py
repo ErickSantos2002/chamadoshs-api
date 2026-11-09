@@ -6,7 +6,8 @@ O detalhe, a listagem e o histórico passam pela política de
 não existe (D6). Os comentários estão em `test_comentarios_por_chamado.py`.
 
 A matriz vem de `leitura_cenario.LEITURA_ESPERADA`, escrita à mão a partir das
-decisões D1–D5. As escritas não mudam: os testes do fim só conferem que
+decisões D1–D5 (a D1 refeita na API-13: o técnico da TI lê só a TI). As
+escritas não mudam: os testes do fim só conferem que
 continuam respondendo como antes.
 """
 
@@ -131,11 +132,14 @@ class TestListagem:
         ]
 
     def test_filtros_estreitam_dentro_do_permitido(self, cliente, como, cenario_de_leitura):
+        # API-13: do outro solicitante, só os que o técnico da TI lê — o da
+        # Qualidade fica de fora. Até a API-12 eram todos.
         h = como("tecnico_ti")
         do_outro = self._ids(cliente, h, solicitante_id=cenario_de_leitura["outro_solicitante"], **self.TUDO)
         assert set(do_outro) == {
-            CHAMADOS[n] for n in LEITURA_ESPERADA["outro_solicitante"]
+            CHAMADOS[n] for n in LEITURA_ESPERADA["outro_solicitante"] & LEITURA_ESPERADA["tecnico_ti"]
         }
+        assert "q_reatribuido" in LEITURA_ESPERADA["outro_solicitante"]
 
     def test_os_pedidos_do_frontend_para_usuario_comum(self, cliente, como, cenario_de_leitura):
         """
@@ -240,10 +244,22 @@ class TestForaDoEscopo:
         assert r.status_code == 405
 
     def test_leitura_da_qualidade_nao_da_atendimento_ao_tecnico_ti(self, cliente, como):
-        """D1 é só leitura: o atendimento continua do responsável."""
+        """
+        API-13: o técnico da TI nem lê o chamado da Qualidade — o 404 de um
+        que não existe. Até a API-12 lia (D1) e recebia 403.
+        """
         r = cliente.patch(
             f"{API}/chamados/{CHAMADOS['q_atribuido']}/atendimento",
             headers=como("tecnico_ti"),
+            json={"status": "Em Andamento", "versao_esperada": 1},
+        )
+        assert r.status_code == 404
+
+    def test_leitura_da_qualidade_nao_da_atendimento_ao_tecnico_da_qualidade(self, cliente, como):
+        """A leitura pelo perfil não dá atendimento: ele continua do responsável."""
+        r = cliente.patch(
+            f"{API}/chamados/{CHAMADOS['q_atribuido']}/atendimento",
+            headers=como("tecnico_qualidade"),
             json={"status": "Em Andamento", "versao_esperada": 1},
         )
         assert r.status_code == 403

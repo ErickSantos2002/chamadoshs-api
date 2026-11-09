@@ -12,13 +12,16 @@ partir das decisões (`ESCRITA_DA_EQUIPE` e as regras de `_esperado`), não
 derivado do código. Cada caso confere também que a recusa não gravou nada —
 nem campo, nem histórico, nem versão — e que o 404 de quem não lê é idêntico
 ao de um id que não existe.
+
+Desde a API-13 o técnico da TI altera só os chamados da TI: os da Qualidade
+ele nem lê, e recebe o 404. Até a API-12 alterava os dois setores (D1).
 """
 
 import pytest
 
 from app.models import Chamado
 from app.models.historico import HistoricoChamado
-from leitura_cenario import CHAMADOS, LEITURA_ESPERADA, ROLE_DE, cenario_de_leitura  # noqa: F401
+from leitura_cenario import CHAMADOS, DA_TI, LEITURA_ESPERADA, ROLE_DE, cenario_de_leitura  # noqa: F401
 
 API = "/api/v1"
 INEXISTENTE = 999_999
@@ -30,7 +33,7 @@ FORA_DA_EQUIPE = {"detail": "Este chamado não é da sua equipe"}
 ESCRITA_DA_EQUIPE = {
     "admin": set(CHAMADOS),
     "admin_da_qualidade": set(CHAMADOS),
-    "tecnico_ti": set(CHAMADOS),  # D1, setor em SETORES_TI_IDS
+    "tecnico_ti": DA_TI,  # API-13, setor em SETORES_TI_IDS; até a API-12, os dois setores (D1)
     "tecnico_qualidade": {"q_atribuido", "q_reatribuido"},  # D2: não o ti_com_tecnico_da_q, que ele lê
     "tecnico_sem_setor": set(),  # H1
     "tecnico_outro_setor": set(),  # D10
@@ -195,11 +198,23 @@ class TestEstados:
         assert _foto(sessao, cid) == antes
 
     @pytest.mark.parametrize("estado", range(6), ids=IDS)
+    @pytest.mark.parametrize("op", ["put", "put_versao_velha", "cancelar", "arquivar", "desarquivar"])
+    def test_tecnico_da_ti_fora_da_qualidade_e_404_em_qualquer_estado(self, cliente, sessao, como, estado, op):
+        """API-13: até a API-12 o técnico da TI alterava o chamado da Qualidade em qualquer estado."""
+        cid = CHAMADOS["q_reatribuido"]
+        self._por_no_estado(sessao, cid, *self.ESTADOS[estado])
+        antes = _foto(sessao, cid)
+        resposta = _requisicao(cliente, op, cid, _versao(sessao, cid), como("tecnico_ti"))
+        assert (resposta.status_code, resposta.json()) == (404, NAO_ENCONTRADO)
+        assert _foto(sessao, cid) == antes
+
+    @pytest.mark.parametrize("estado", range(6), ids=IDS)
     @pytest.mark.parametrize(
         "quem,alvo",
         [
             ("tecnico_ti", "ti_sem_responsavel"),
-            ("tecnico_ti", "q_reatribuido"),
+            # API-13: na Qualidade, o administrador; até a API-12 também o técnico da TI.
+            ("admin", "q_reatribuido"),
             ("tecnico_qualidade", "q_reatribuido"),
             ("admin", "ti_sem_responsavel"),
         ],

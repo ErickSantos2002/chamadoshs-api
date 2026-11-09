@@ -4,7 +4,8 @@
 Até a API-5, técnico de qualquer setor que não fosse o da Qualidade era da
 TI: lia os dois setores de destino e alterava qualquer chamado. Agora a TI é
 uma lista explícita de setores, e o que não está nela não tem alcance por
-perfil — nem por exclusão, nem com a configuração ausente.
+perfil — nem por exclusão, nem com a configuração ausente. Desde a API-13 o
+alcance da TI é só o setor de destino TI; até a API-12 eram os dois (D1).
 
 Três partes: a leitura da variável (sem banco), a classificação dos sete
 tipos de conta (no serviço) e o comportamento das rotas com a configuração
@@ -23,10 +24,9 @@ from app.services.leitura_service import (
     pode_ler_chamado,
     setores_lidos_pelo_perfil,
 )
-from leitura_cenario import CHAMADOS, ROLE_DE, cenario_de_leitura  # noqa: F401
+from leitura_cenario import CHAMADOS, DA_TI, ROLE_DE, cenario_de_leitura  # noqa: F401
 
 API = "/api/v1"
-OS_DOIS = {"TI", "QUALIDADE"}
 
 
 class TestInterpretacao:
@@ -123,7 +123,7 @@ class TestClassificacao:
         "quem,alcance",
         [
             ("admin", set()),  # lê e altera tudo por outro caminho, não pelo alcance
-            ("tecnico_ti", OS_DOIS),  # D1, setor em SETORES_TI_IDS
+            ("tecnico_ti", {"TI"}),  # API-13, setor em SETORES_TI_IDS; até a API-12, os dois (D1)
             ("tecnico_qualidade", {"QUALIDADE"}),  # D2
             ("tecnico_outro_setor", set()),  # D10
             ("tecnico_sem_setor", set()),  # H1
@@ -145,7 +145,7 @@ class TestClassificacao:
         [
             ("admin", set(CHAMADOS)),
             ("admin_da_qualidade", set(CHAMADOS)),
-            ("tecnico_ti", set(CHAMADOS)),
+            ("tecnico_ti", DA_TI),  # API-13: até a API-12, todos
             ("tecnico_qualidade", {"q_atribuido", "q_reatribuido"}),
             ("tecnico_outro_setor", set()),
             ("tecnico_sem_setor", set()),
@@ -218,7 +218,7 @@ class TestConfiguracao:
 
     def test_setor_inexistente_na_lista_nao_amplia_nada(self, cliente, como, monkeypatch):
         monkeypatch.setattr(main.settings, "SETORES_TI_IDS", "1,999")
-        assert _ids_listados(cliente, como("tecnico_ti")) == set(CHAMADOS.values())
+        assert _ids_listados(cliente, como("tecnico_ti")) == {CHAMADOS[n] for n in DA_TI}
         assert _ids_listados(cliente, como("tecnico_outro_setor")) == set()
 
     def test_qualidade_na_lista_nao_vira_ti(self, cliente, como, monkeypatch, cenario_de_leitura):
@@ -232,9 +232,9 @@ class TestConfiguracao:
         assert _ids_listados(cliente, como("tecnico_qualidade")) == {CHAMADOS["ti_com_tecnico_da_q"]}
 
     def test_outro_setor_declarado_vira_ti(self, cliente, como, monkeypatch, cenario_de_leitura):
-        """A lista é o que manda: incluir o Comercial dá ao técnico de lá o alcance da TI."""
+        """A lista é o que manda: incluir o Comercial dá ao técnico de lá o alcance da TI — só a TI (API-13)."""
         monkeypatch.setattr(main.settings, "SETORES_TI_IDS", "1,4")
-        assert _ids_listados(cliente, como("tecnico_outro_setor")) == set(CHAMADOS.values())
+        assert _ids_listados(cliente, como("tecnico_outro_setor")) == {CHAMADOS[n] for n in DA_TI}
 
 
 class TestDiagnostico:

@@ -1,11 +1,16 @@
 """
-Comentário interno só para administrador e técnico da TI (API-8).
+Comentário interno só para o administrador humano e para a equipe do setor de
+destino do chamado (API-13; na API-8, administrador e técnico da TI).
 
 Até a API-7 bastava o perfil de equipe: o técnico da Qualidade, o de outro
 setor e o sem setor viam e criavam comentário interno em todo chamado que
-liam pelo vínculo — que abriram ou atendem. Agora são duas perguntas, as duas
-exigidas: ler o chamado (API-5/API-6) e poder o interno
-(`pode_acessar_comentario_interno`).
+liam pelo vínculo — que abriram ou atendem. Na API-8 a pergunta passou a ser
+só do perfil: administrador e técnico da TI em tudo o que liam, inclusive os
+da Qualidade, e o técnico da Qualidade em nada. Desde a API-13 ela depende
+também do chamado: o técnico da TI nos da TI, o da Qualidade nos da
+Qualidade, e o vínculo não dá o interno do outro setor. São duas perguntas,
+as duas exigidas: ler o chamado (API-5/API-6) e poder o interno daquele
+chamado (`pode_acessar_comentario_interno`).
 
 A matriz é configuração × perfil × chamado. A leitura do chamado vem da
 própria API (`GET /chamados/{id}`): o que se prova aqui não é quem lê — isso
@@ -80,6 +85,7 @@ PERFIS = [
 ADMINISTRADORES = {"admin", "admin_da_qualidade"}
 # API-10 (C1): a conta de serviço técnica da TI saiu daqui — não integra a equipe.
 TECNICOS_DA_TI = {"tecnico_ti"}
+TECNICOS_DA_QUALIDADE = {"tecnico_qualidade"}
 
 # Os chamados que cada perfil lê só pelo vínculo — em qualquer configuração.
 VINCULOS = {
@@ -99,11 +105,24 @@ VINCULOS = {
 SEM_LEITURA = {"ex_responsavel", "intruso", "conta_de_servico", "usuario_sem_setor"}
 
 
-def pode_o_interno(quem, configuracao):
-    """A regra aprovada, escrita à mão."""
+def setor_de(nome):
+    """O setor de destino de um chamado do cenário, pelo nome."""
+    if nome in VINCULADOS:
+        return VINCULADOS[nome][0]
+    return "QUALIDADE" if nome.startswith("q_") else "TI"
+
+
+def pode_o_interno(quem, configuracao, nome):
+    """
+    A regra aprovada (API-13), escrita à mão: o administrador em todo
+    chamado; o técnico da TI nos da TI, se a lista é válida; o da Qualidade
+    nos da Qualidade, qualquer que seja a lista da TI. O vínculo não entra.
+    """
     if quem in ADMINISTRADORES:
         return True
-    return quem in TECNICOS_DA_TI and CONFIGURACOES[configuracao][1]
+    if setor_de(nome) == "TI":
+        return quem in TECNICOS_DA_TI and CONFIGURACOES[configuracao][1]
+    return quem in TECNICOS_DA_QUALIDADE
 
 
 @pytest.fixture
@@ -180,7 +199,6 @@ def _foto(sessao):
 def test_leitura_por_configuracao_e_perfil(cliente, como, configurar, configuracao, quem):
     configurar(configuracao)
     h = como(quem)
-    pode = pode_o_interno(quem, configuracao)
     lista_inexistente = cliente.get(f"{API}/comentarios/chamado/{INEXISTENTE}", headers=h)
     id_inexistente = cliente.get(f"{API}/comentarios/{INEXISTENTE}", headers=h)
     assert id_inexistente.json() == COMENTARIO_NAO_ENCONTRADO
@@ -191,6 +209,7 @@ def test_leitura_por_configuracao_e_perfil(cliente, como, configurar, configurac
         lista = cliente.get(f"{API}/comentarios/chamado/{cid}", headers=h)
         publico = cliente.get(f"{API}/comentarios/{comentario_publico(cid)}", headers=h)
         interno = cliente.get(f"{API}/comentarios/{comentario_interno(cid)}", headers=h)
+        pode = pode_o_interno(quem, configuracao, nome)
 
         if leitura.status_code == 200:
             lidos.add(nome)
@@ -219,7 +238,9 @@ def test_leitura_por_configuracao_e_perfil(cliente, como, configurar, configurac
 
 
 # O chamado em que cada perfil comenta: um que ele lê pelo vínculo, em
-# qualquer configuração; e, para quem não lê nenhum, um que ele não lê.
+# qualquer configuração; e, para quem não lê nenhum, um que ele não lê. O do
+# técnico da TI é da Qualidade: ele o lê pelo vínculo (abriu), e desde a
+# API-13 não cria interno nele — o interno dele na TI está em `TestCasosNomeados`.
 ALVO = {
     "admin": "q_atribuido",
     "admin_da_qualidade": "ti_do_solicitante",
@@ -259,7 +280,7 @@ def test_criacao(cliente, sessao, como, configurar, saidas, configuracao, quem, 
         )
         assert (resposta.status_code, resposta.json()) == (404, CHAMADO_NAO_ENCONTRADO)
         assert inexistente.json() == CHAMADO_NAO_ENCONTRADO
-    elif interno and not pode_o_interno(quem, configuracao):
+    elif interno and not pode_o_interno(quem, configuracao, ALVO[quem]):
         assert (resposta.status_code, resposta.json()) == (403, {"detail": CRIAR_INTERNO_NEGADO})
     else:
         assert resposta.status_code == 201, resposta.text
@@ -296,14 +317,33 @@ class TestCasosNomeados:
             comentario_publico(cid)
         ]
 
-    def test_tecnico_da_qualidade_nao_ve_o_interno_nem_nos_chamados_da_qualidade(self, cliente, como):
-        """Lê pelo perfil todos os da Qualidade, e nenhum interno deles."""
+    def test_tecnico_da_qualidade_ve_o_interno_dos_chamados_da_qualidade(self, cliente, como):
+        """API-13: lê pelo perfil todos os da Qualidade, e o interno deles. Até a API-12, nenhum."""
         h = como("tecnico_qualidade")
         for nome in ("q_atribuido", "q_reatribuido", "q_com_tecnico_outro"):
             cid = TODOS_OS_CHAMADOS[nome]
             lista = cliente.get(f"{API}/comentarios/chamado/{cid}", headers=h)
             assert lista.status_code == 200
-            assert [c["id"] for c in lista.json()] == [comentario_publico(cid)]
+            assert {c["id"] for c in lista.json()} == {comentario_publico(cid), comentario_interno(cid)}
+
+    def test_tecnico_da_ti_nao_ve_o_interno_do_chamado_da_qualidade_que_le_pelo_vinculo(self, cliente, como):
+        """API-13: abriu o chamado da Qualidade e o lê, mas o interno é da equipe da Qualidade."""
+        cid = TODOS_OS_CHAMADOS["q_do_tecnico_ti"]
+        h = como("tecnico_ti")
+        assert cliente.get(f"{API}/chamados/{cid}", headers=h).status_code == 200
+        assert cliente.get(f"{API}/comentarios/{comentario_interno(cid)}", headers=h).json() == COMENTARIO_NAO_ENCONTRADO
+        assert [c["id"] for c in cliente.get(f"{API}/comentarios/chamado/{cid}", headers=h).json()] == [
+            comentario_publico(cid)
+        ]
+
+    def test_tecnico_da_ti_ve_e_cria_interno_na_ti(self, cliente, como):
+        cid = CHAMADOS["ti_sem_responsavel"]
+        h = como("tecnico_ti")
+        assert cliente.get(f"{API}/comentarios/{comentario_interno(cid)}", headers=h).status_code == 200
+        r = cliente.post(
+            f"{API}/comentarios/", headers=h, json={"chamado_id": cid, "comentario": "Interno", "is_interno": True},
+        )
+        assert r.status_code == 201
 
     def test_responsavel_da_qualidade_de_perfil_usuario_nao_ve_o_interno(self, cliente, como):
         cid = CHAMADOS["q_atribuido"]
@@ -329,21 +369,26 @@ class TestCasosNomeados:
             assert r.json()["is_interno"] is False
 
     def test_lista_com_so_internos_vira_lista_vazia_e_nao_erro(self, cliente, sessao, como):
+        # A responsável de perfil Usuário: lê o chamado e não o interno. Até a
+        # API-12 era o técnico da Qualidade, que desde a API-13 vê o interno.
         cid = TODOS_OS_CHAMADOS["q_do_tecnico_q"]
         sessao.delete(sessao.get(ComentarioChamado, comentario_publico(cid)))
         sessao.commit()
-        r = cliente.get(f"{API}/comentarios/chamado/{cid}", headers=como("tecnico_qualidade"))
+        r = cliente.get(f"{API}/comentarios/chamado/{cid}", headers=como("atendente"))
         assert (r.status_code, r.json()) == (200, [])
 
     def test_ordem_e_formato_da_lista_nao_mudam(self, cliente, sessao, como):
-        """A lista do técnico da TI é a de antes; a do resto, a mesma sem os internos."""
+        """A lista da equipe é a de antes; a do resto, a mesma sem os internos."""
         cid = CHAMADOS["q_atribuido"]
         sessao.add(ComentarioChamado(
             id=9000, chamado_id=cid, usuario_id=como_id(sessao, "solicitante"), comentario="Outro público",
         ))
         sessao.commit()
-        completa = cliente.get(f"{API}/comentarios/chamado/{cid}", headers=como("tecnico_ti")).json()
-        restrita = cliente.get(f"{API}/comentarios/chamado/{cid}", headers=como("tecnico_qualidade")).json()
+        # API-13: a equipe deste chamado é a da Qualidade; a responsável de
+        # perfil Usuário o lê sem o interno.
+        completa = cliente.get(f"{API}/comentarios/chamado/{cid}", headers=como("tecnico_qualidade")).json()
+        restrita = cliente.get(f"{API}/comentarios/chamado/{cid}", headers=como("atendente")).json()
+        assert any(c["is_interno"] for c in completa)
         assert restrita == [c for c in completa if not c["is_interno"]]
         assert set(restrita[0]) == {"id", "chamado_id", "usuario_id", "comentario", "is_interno", "created_at", "updated_at"}
 
@@ -355,7 +400,8 @@ class TestCasosNomeados:
 
     def test_conta_de_servico_tecnico_da_ti_nao_ve_o_interno(self, cliente, como):
         """API-10 (C1): fecha o risco residual da API-8. Lê o chamado, não o interno."""
-        cid = CHAMADOS["q_atribuido"]
+        # Um da TI: desde a API-13 ela não lê os da Qualidade.
+        cid = CHAMADOS["ti_sem_responsavel"]
         h = como("conta_de_servico_ti")
         assert cliente.get(f"{API}/chamados/{cid}", headers=h).status_code == 200
         assert cliente.get(f"{API}/comentarios/{comentario_interno(cid)}", headers=h).status_code == 404
@@ -375,7 +421,8 @@ class TestCasosNomeados:
         assert r.status_code == 201
 
     def test_mudanca_de_setor_vale_no_proximo_pedido(self, cliente, sessao, como, internos):
-        cid = CHAMADOS["q_atribuido"]
+        # Um da TI: desde a API-13 o técnico da TI não vê o interno da Qualidade.
+        cid = CHAMADOS["ti_sem_responsavel"]
         h = como("tecnico_ti")
         assert cliente.get(f"{API}/comentarios/{comentario_interno(cid)}", headers=h).status_code == 200
         sessao.get(Usuario, internos["tecnico_ti"]).setor_id = 4
@@ -383,17 +430,24 @@ class TestCasosNomeados:
         assert cliente.get(f"{API}/comentarios/{comentario_interno(cid)}", headers=h).status_code == 404
 
 
-@pytest.mark.parametrize("quem", sorted(set(PERFIS) - ADMINISTRADORES - TECNICOS_DA_TI))
+@pytest.mark.parametrize("quem", sorted(set(PERFIS) - ADMINISTRADORES))
 def test_o_interno_nao_vaza_por_outra_resposta(cliente, como, quem):
-    """Nenhuma rota de chamado ou de histórico carrega o texto de comentário."""
+    """
+    Nenhuma rota de chamado ou de histórico carrega o texto de comentário.
+
+    Desde a API-13 cada técnico vê o interno de um setor só: a lista de
+    comentários entra onde ele não pode o interno — para o técnico da TI, os
+    da Qualidade; para o da Qualidade, os da TI.
+    """
     h = como(quem)
     respostas = [cliente.get(f"{API}/chamados/", headers=h)]
-    for cid in TODOS_OS_CHAMADOS.values():
+    for nome, cid in TODOS_OS_CHAMADOS.items():
         respostas += [
             cliente.get(f"{API}/chamados/{cid}", headers=h),
             cliente.get(f"{API}/historico/chamado/{cid}", headers=h),
-            cliente.get(f"{API}/comentarios/chamado/{cid}", headers=h),
         ]
+        if not pode_o_interno(quem, "valida", nome):
+            respostas.append(cliente.get(f"{API}/comentarios/chamado/{cid}", headers=h))
     for resposta in respostas:
         assert MARCA_DO_INTERNO not in resposta.text, resposta.url
 

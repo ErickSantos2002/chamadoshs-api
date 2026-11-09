@@ -6,6 +6,11 @@ que fazia. O que muda é só o responsável de um chamado da Qualidade: ele pass
 pela mesma regra de elegibilidade da abertura (`qualidade_service`), e a troca
 não dispara o webhook da TI.
 
+Desde a API-13 a equipe de um chamado da Qualidade é a da Qualidade: os
+testes dela agem como o técnico da Qualidade (ou o administrador), e o
+técnico da TI, que até a API-12 também editava esses chamados, nem os lê
+(404).
+
 Só a MUDANÇA de responsável é validada. A edição completa do frontend reenvia
 o responsável atual em todo salvamento; validar esse reenvio deixaria
 ineditável o chamado cujo responsável saiu da Qualidade depois de atribuído.
@@ -25,6 +30,10 @@ from versao_do_cliente import com_versao_lida
 
 def _tecnico(autenticar, dados):
     return autenticar(dados["tecnico_id"], "tecnico.teste", "Tecnico")
+
+
+def _tecnico_da_qualidade(autenticar, dados):
+    return autenticar(dados["tecnico_da_qualidade_id"], "bruno.qualidade", "Tecnico")
 
 
 def _admin(autenticar, dados):
@@ -58,7 +67,7 @@ def _put(cliente, chamado_id, corpo, headers):
 
 
 class TestNovoResponsavel:
-    @pytest.mark.parametrize("quem", [_tecnico, _admin])
+    @pytest.mark.parametrize("quem", [_tecnico_da_qualidade, _admin])
     def test_elegivel_e_aceito_pela_equipe(
         self, cliente, chamado_qualidade, sessao, autenticar, webhook, quem
     ):
@@ -80,7 +89,7 @@ class TestNovoResponsavel:
         resposta = _put(
             cliente, d["chamado_qualidade_id"],
             {"tecnico_responsavel_id": d["admin_da_qualidade_id"]},
-            _tecnico(autenticar, d),
+            _tecnico_da_qualidade(autenticar, d),
         )
 
         assert resposta.status_code == 200
@@ -91,7 +100,7 @@ class TestNovoResponsavel:
         resposta = _put(
             cliente, d["chamado_qualidade_id"],
             {"tecnico_responsavel_id": d["tecnico_da_qualidade_id"]},
-            _tecnico(autenticar, d),
+            _tecnico_da_qualidade(autenticar, d),
         )
 
         assert resposta.status_code == 200
@@ -108,7 +117,7 @@ class TestNovoResponsavel:
         _put(
             cliente, d["chamado_qualidade_id"],
             {"tecnico_responsavel_id": d["tecnico_da_qualidade_id"]},
-            _tecnico(autenticar, d),
+            _tecnico_da_qualidade(autenticar, d),
         )
 
         assert _historicos(sessao, d["chamado_qualidade_id"]) == antes
@@ -125,7 +134,7 @@ class TestResponsavelRecusado:
         resposta = _put(
             cliente, d["chamado_qualidade_id"],
             {"tecnico_responsavel_id": d[chave]},
-            _tecnico(autenticar, d),
+            _tecnico_da_qualidade(autenticar, d),
         )
 
         assert resposta.status_code == 400
@@ -136,7 +145,7 @@ class TestResponsavelRecusado:
     def test_inexistente_e_400(self, cliente, chamado_qualidade, sessao, autenticar, webhook):
         d = chamado_qualidade
         resposta = _put(
-            cliente, d["chamado_qualidade_id"], {"tecnico_responsavel_id": 999}, _tecnico(autenticar, d)
+            cliente, d["chamado_qualidade_id"], {"tecnico_responsavel_id": 999}, _tecnico_da_qualidade(autenticar, d)
         )
 
         assert resposta.status_code == 400
@@ -146,7 +155,7 @@ class TestResponsavelRecusado:
     def test_desatribuir_e_400(self, cliente, chamado_qualidade, sessao, autenticar, webhook):
         d = chamado_qualidade
         resposta = _put(
-            cliente, d["chamado_qualidade_id"], {"tecnico_responsavel_id": None}, _tecnico(autenticar, d)
+            cliente, d["chamado_qualidade_id"], {"tecnico_responsavel_id": None}, _tecnico_da_qualidade(autenticar, d)
         )
 
         assert resposta.status_code == 400
@@ -169,7 +178,7 @@ class TestResponsavelRecusado:
         resposta = _put(
             cliente, d["chamado_qualidade_id"],
             {**corpo_extra, "tecnico_responsavel_id": valor},
-            _tecnico(autenticar, d),
+            _tecnico_da_qualidade(autenticar, d),
         )
 
         assert resposta.status_code == 400
@@ -183,13 +192,15 @@ class TestResponsavelRecusado:
     def test_qualidade_indisponivel_e_503(
         self, cliente, chamado_qualidade, sessao, autenticar, webhook, monkeypatch, valor
     ):
+        # O administrador: sem a Qualidade configurada, o técnico do setor 2
+        # não é da equipe de ninguém e nem lê o chamado (API-13).
         d = chamado_qualidade
         monkeypatch.setattr(main.settings, "SETOR_QUALIDADE_ID", valor)
 
         resposta = _put(
             cliente, d["chamado_qualidade_id"],
             {"tecnico_responsavel_id": d["tecnico_da_qualidade_id"]},
-            _tecnico(autenticar, d),
+            _admin(autenticar, d),
         )
 
         assert resposta.status_code == 503
@@ -204,7 +215,7 @@ class TestMesmoResponsavel:
         resposta = _put(
             cliente, d["chamado_qualidade_id"],
             {"status": "Em Andamento", "tecnico_responsavel_id": d["atendente_id"]},
-            _tecnico(autenticar, d),
+            _tecnico_da_qualidade(autenticar, d),
         )
 
         assert resposta.status_code == 200
@@ -230,7 +241,7 @@ class TestMesmoResponsavel:
         resposta = _put(
             cliente, d["chamado_qualidade_id"],
             {"prioridade": "Alta", "tecnico_responsavel_id": d["atendente_id"]},
-            _tecnico(autenticar, d),
+            _tecnico_da_qualidade(autenticar, d),
         )
 
         assert resposta.status_code == 200
@@ -239,13 +250,14 @@ class TestMesmoResponsavel:
     def test_reenvio_nao_consulta_a_configuracao(
         self, cliente, chamado_qualidade, sessao, autenticar, webhook, monkeypatch
     ):
+        # O administrador, pelo mesmo motivo de `test_qualidade_indisponivel_e_503`.
         d = chamado_qualidade
         monkeypatch.setattr(main.settings, "SETOR_QUALIDADE_ID", None)
 
         resposta = _put(
             cliente, d["chamado_qualidade_id"],
             {"prioridade": "Alta", "tecnico_responsavel_id": d["atendente_id"]},
-            _tecnico(autenticar, d),
+            _admin(autenticar, d),
         )
 
         assert resposta.status_code == 200
@@ -253,11 +265,12 @@ class TestMesmoResponsavel:
     def test_campo_ausente_preserva_o_responsavel(
         self, cliente, chamado_qualidade, sessao, autenticar, webhook, monkeypatch
     ):
+        # O administrador, pelo mesmo motivo de `test_qualidade_indisponivel_e_503`.
         d = chamado_qualidade
         monkeypatch.setattr(main.settings, "SETOR_QUALIDADE_ID", None)
 
         resposta = _put(
-            cliente, d["chamado_qualidade_id"], {"status": "Em Andamento"}, _tecnico(autenticar, d)
+            cliente, d["chamado_qualidade_id"], {"status": "Em Andamento"}, _admin(autenticar, d)
         )
 
         assert resposta.status_code == 200
@@ -283,6 +296,19 @@ class TestQuemPodeReatribuir:
         assert resposta.status_code == 403
         assert _chamado(sessao, d["chamado_qualidade_id"]).tecnico_responsavel_id == d["atendente_id"]
 
+    def test_tecnico_da_ti_nao_le_e_e_404(self, cliente, chamado_qualidade, sessao, autenticar, webhook):
+        """API-13: até a API-12 o técnico da TI reatribuía o chamado da Qualidade (D1)."""
+        d = chamado_qualidade
+        resposta = _put(
+            cliente, d["chamado_qualidade_id"],
+            {"tecnico_responsavel_id": d["tecnico_da_qualidade_id"]},
+            _tecnico(autenticar, d),
+        )
+
+        assert resposta.status_code == 404
+        assert _chamado(sessao, d["chamado_qualidade_id"]).tecnico_responsavel_id == d["atendente_id"]
+        assert webhook == []
+
     def test_sem_token_e_401(self, cliente, chamado_qualidade):
         resposta = cliente.put(
             f"/api/v1/chamados/{chamado_qualidade['chamado_qualidade_id']}",
@@ -291,7 +317,7 @@ class TestQuemPodeReatribuir:
         assert resposta.status_code == 401
 
     def test_chamado_inexistente_continua_404(self, cliente, chamado_qualidade, autenticar, webhook):
-        resposta = _put(cliente, 9999, {"tecnico_responsavel_id": 999}, _tecnico(autenticar, chamado_qualidade))
+        resposta = _put(cliente, 9999, {"tecnico_responsavel_id": 999}, _tecnico_da_qualidade(autenticar, chamado_qualidade))
         assert resposta.status_code == 404
 
 

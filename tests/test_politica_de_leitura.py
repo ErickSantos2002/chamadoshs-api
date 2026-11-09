@@ -50,7 +50,8 @@ class TestCasosDeBorda:
         """
         Sem `SETOR_QUALIDADE_ID`, ninguém é da Qualidade — e o técnico que
         seria dela não cai na TI por exclusão (D10; até a API-5, caía). O da
-        TI, declarado em `SETORES_TI_IDS`, segue lendo os dois.
+        TI, declarado em `SETORES_TI_IDS`, segue lendo a TI — só ela desde a
+        API-13; até a API-12, os dois (D1).
         """
         import main
 
@@ -58,7 +59,7 @@ class TestCasosDeBorda:
         tecnico_q = _usuario(sessao, cenario_de_leitura["tecnico_qualidade"])
         tecnico_ti = _usuario(sessao, cenario_de_leitura["tecnico_ti"])
         assert setores_lidos_pelo_perfil(tecnico_q) == frozenset()
-        assert setores_lidos_pelo_perfil(tecnico_ti) == {"TI", "QUALIDADE"}
+        assert setores_lidos_pelo_perfil(tecnico_ti) == {"TI"}
 
     def test_tecnico_sem_setor_nao_le_por_perfil(self, cenario_de_leitura, sessao):
         tecnico = _usuario(sessao, cenario_de_leitura["tecnico_sem_setor"])

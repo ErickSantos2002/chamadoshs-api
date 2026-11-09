@@ -41,12 +41,16 @@ CHAMADOS = {
 }
 
 TODOS = set(CHAMADOS)
+DA_QUALIDADE = {"q_atribuido", "q_reatribuido"}
+DA_TI = TODOS - DA_QUALIDADE
 
 # Quem lê o quê, pela matriz aprovada.
 LEITURA_ESPERADA = {
     "admin": TODOS,
     "admin_da_qualidade": TODOS,  # D: administrador lê todos, de qualquer setor
-    "tecnico_ti": TODOS,  # D1
+    # API-13: só a TI inteira; da Qualidade só o vínculo, e ele não tem
+    # nenhum aqui. Até a API-12 lia os dois setores (D1).
+    "tecnico_ti": DA_TI,
     # D2: Qualidade inteira; da TI só o que ele atende.
     "tecnico_qualidade": {"q_atribuido", "q_reatribuido", "ti_com_tecnico_da_q"},
     "solicitante": {"ti_do_solicitante", "q_atribuido"},
@@ -67,10 +71,18 @@ LEITURA_ESPERADA = {
     "conta_de_servico": set(),
 }
 
-# Quem vê comentário interno nos chamados que lê (API-8): administrador e
-# técnico da TI. Até a API-7 era todo perfil de equipe — o técnico da
-# Qualidade via o interno dos chamados da Qualidade e dos que atende.
-VEEM_INTERNO = {"admin", "admin_da_qualidade", "tecnico_ti"}
+# Em quais chamados cada um vê o comentário interno (API-13): o
+# administrador humano em todos, e cada equipe nos do seu setor de destino.
+# O vínculo não conta: o técnico da Qualidade lê o `ti_com_tecnico_da_q` por
+# ser o responsável, mas o interno dele é da TI. Até a API-12 a regra era só
+# de perfil — administrador e técnico da TI em tudo o que liam, e o técnico
+# da Qualidade em nada (API-8).
+VEEM_INTERNO = {
+    "admin": TODOS,
+    "admin_da_qualidade": TODOS,
+    "tecnico_ti": DA_TI,
+    "tecnico_qualidade": DA_QUALIDADE,
+}
 
 ROLE_DE = {
     "admin": "Administrador",

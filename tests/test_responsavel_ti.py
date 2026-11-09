@@ -169,7 +169,8 @@ class TestQualidadeInalterada:
     def test_reatribuicao_da_qualidade_aceita_o_tecnico_da_qualidade(self, cliente, sessao, como, cenario_de_leitura):
         cid = CHAMADOS["q_reatribuido"]
         versao = sessao.get(Chamado, cid).versao
-        resposta = _atribuir(cliente, como("tecnico_ti"), cid, cenario_de_leitura["tecnico_qualidade"], versao_esperada=versao)
+        # A equipe da Qualidade reatribui (API-13): até a API-12 este era o técnico da TI.
+        resposta = _atribuir(cliente, como("tecnico_qualidade"), cid, cenario_de_leitura["tecnico_qualidade"], versao_esperada=versao)
         assert resposta.status_code == 200
 
     def test_e_recusa_o_tecnico_da_ti(self, cliente, sessao, como, cenario_de_leitura):

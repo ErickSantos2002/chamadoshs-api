@@ -23,9 +23,11 @@ A regra (decisões D1–D5, aprovadas em 29/10/2026):
    setor do solicitante não conta (D5).
 3. Técnico da Qualidade — perfil Técnico no setor de `SETOR_QUALIDADE_ID` —
    lê os chamados da Qualidade (D2), e da TI só os do item 2.
-4. Técnico da TI — perfil Técnico num setor de `SETORES_TI_IDS` — lê os dois
-   setores de destino (D1). (API-6, D10: até a API-5 era técnico de qualquer
-   setor que não a Qualidade.)
+4. Técnico da TI — perfil Técnico num setor de `SETORES_TI_IDS` — lê os
+   chamados da TI, e da Qualidade só os do item 2 (API-13, isolamento entre
+   as equipes). Até a API-12 lia os dois setores de destino (D1), e por isso
+   também os alterava e via os internos deles. (API-6, D10: até a API-5 era
+   técnico de qualquer setor que não a Qualidade.)
 5. Técnico de outro setor, ou sem setor, não tem leitura por perfil, só a do
    item 2 (H1): sem setor da TI ou da Qualidade não dá para dizer de qual
    equipe ele é, e o padrão aqui é fechar. Sem `SETORES_TI_IDS`, é o caso de
@@ -50,7 +52,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Query, Session
 
-from app.api.deps import is_admin, is_admin_humano, is_staff
+from app.api.deps import is_admin, is_staff
 from app.core.config import settings
 from app.models.chamado import Chamado
 from app.models.usuario import Usuario
@@ -60,7 +62,7 @@ SETOR_DESTINO_QUALIDADE = "QUALIDADE"
 
 _NENHUM: FrozenSet[str] = frozenset()
 _SO_QUALIDADE = frozenset({SETOR_DESTINO_QUALIDADE})
-_OS_DOIS = frozenset({SETOR_DESTINO_TI, SETOR_DESTINO_QUALIDADE})
+_SO_TI = frozenset({SETOR_DESTINO_TI})
 
 
 def setores_lidos_pelo_perfil(usuario: Usuario) -> FrozenSet[str]:
@@ -82,7 +84,7 @@ def setores_lidos_pelo_perfil(usuario: Usuario) -> FrozenSet[str]:
         return _SO_QUALIDADE
     # `setores_ti_ids` já tira o id da Qualidade: a ordem aqui não decide.
     if usuario.setor_id in settings.setores_ti_ids:
-        return _OS_DOIS
+        return _SO_TI
     return _NENHUM
 
 
@@ -147,24 +149,27 @@ def integra_equipe_ti(usuario: Usuario) -> bool:
     return is_staff(usuario) and usuario.setor_id is not None and usuario.setor_id in settings.setores_ti_ids
 
 
-def pode_acessar_comentario_interno(usuario: Usuario) -> bool:
+def pode_acessar_comentario_interno(usuario: Usuario, chamado: Chamado) -> bool:
     """
-    Se `usuario` pode ver e escrever comentário interno (API-8): o
-    administrador, pelo perfil, e o técnico que `integra_equipe_ti` diz ser
-    da TI.
+    Se `usuario` pode ver e escrever comentário interno em `chamado`: o
+    administrador humano, e a equipe do setor de destino do chamado (API-13).
 
-    Até a API-7 bastava o perfil de equipe (`is_staff`): o técnico da
-    Qualidade, o de outro setor e o sem setor viam e criavam interno em todo
-    chamado que liam pelo vínculo. A pergunta aqui é só a do perfil; ler o
-    chamado é outra, e as duas são exigidas — o técnico da TI não vê o
-    interno de um chamado que não lê. Sem `SETORES_TI_IDS` válida, só o
-    administrador.
+    A equipe é a mesma de `pode_alterar_como_equipe`: o técnico da TI nos
+    chamados da TI, o técnico da Qualidade nos da Qualidade. Quem atende um
+    setor discute o caso no interno dele, e não lê o interno do outro — nem
+    pelo vínculo de solicitante ou de responsável, que dá a leitura do
+    chamado, não a da equipe.
 
-    O administrador é o humano (API-11, S3): a conta de serviço
-    administradora não vê nem cria interno, como a técnica (API-10). Nenhum
-    uso documentado dependia disso — o painel de parede não lê comentário.
+    Até a API-12 a pergunta era só do perfil (API-8): administrador e técnico
+    da TI viam o interno de todo chamado que liam, inclusive os da
+    Qualidade, e o técnico da Qualidade não via nem o dos chamados que
+    atende. Antes da API-8 bastava `is_staff`.
+
+    Conta de serviço nunca: nem a administradora (API-11, S3) nem a técnica
+    (API-10). Ler o chamado continua sendo outra pergunta, e as duas são
+    exigidas pelas rotas.
     """
-    return is_admin_humano(usuario) or integra_equipe_ti(usuario)
+    return pode_alterar_como_equipe(usuario, chamado)
 
 
 def escopo_de_leitura(query: Query, usuario: Usuario) -> Query:

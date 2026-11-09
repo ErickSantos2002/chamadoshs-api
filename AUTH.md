@@ -326,7 +326,7 @@ migração estão em [docs/contas-de-servico.md](docs/contas-de-servico.md).
 
 | Conta de serviço | `integra_equipe_ti` | `require_equipe_ti` | `require_admin` | Comentário interno | Lê chamados pelo perfil | Escrita de equipe |
 |---|---|---|---|---|---|---|
-| Técnico num setor da TI | `false` (API-10) | 403 (API-10) | 403 de perfil | não (API-10) | sim, TI e Qualidade | **403** (API-11; até a API-10, sim) |
+| Técnico num setor da TI | `false` (API-10) | 403 (API-10) | 403 de perfil | não (API-10) | sim, a TI (API-13; antes, TI e Qualidade) | **403** (API-11; até a API-10, sim) |
 | Técnico da Qualidade | `false` | 403 | 403 de perfil | não | sim, a Qualidade | **403** (API-11) |
 | Técnico de outro setor, sem setor, perfil Usuário | `false` | 403 | 403 de perfil | não | não | 403 |
 | **Administrador** | `false` | **403** (API-11; até a API-10, passava) | **403** (API-11) | **não** (API-11) | sim, todos | **403** (API-11) |
@@ -352,14 +352,17 @@ de tarefas inclusive, qualquer que seja o perfil dela.
 só os do alcance do perfil (API-6, ver "Escrita de chamado pela equipe"), e
 nunca conta de serviço (API-11, S2).
 
-**Administrador ou Técnico da TI, nos chamados que lê**
-(`pode_acessar_comentario_interno`, API-8): ler e criar comentário interno.
-É a mesma regra de `require_equipe_ti`: administrador humano (API-11), técnico
-só num setor de `SETORES_TI_IDS` e só se não for conta de serviço (API-10). O técnico da Qualidade, o de outro setor e
-o sem setor não leem nem criam interno — nem como solicitante, nem como
-responsável, nem nos chamados da Qualidade —, e sem `SETORES_TI_IDS` válida
-só o administrador. As duas coisas são exigidas: o técnico da TI não vê o
-interno de um chamado que não lê.
+**A equipe do setor de destino do chamado**
+(`pode_acessar_comentario_interno`, API-8, por chamado desde a API-13): ler e
+criar comentário interno. É a mesma regra de `pode_alterar_como_equipe`:
+administrador humano (API-11) em todos; o técnico da TI (setor em
+`SETORES_TI_IDS`, não conta de serviço — API-10) nos chamados da TI; o técnico
+da Qualidade nos da Qualidade. O vínculo não dá o interno: o técnico de uma
+equipe não vê nem cria interno num chamado da outra que lê como solicitante ou
+responsável, e o de outro setor ou sem setor não vê interno nenhum. Sem
+`SETORES_TI_IDS` válida, a TI fica só com o administrador. Até a API-12 a
+regra era pelo perfil: administrador e técnico da TI em todo chamado que liam,
+e a Qualidade sem interno nenhum.
 
 | Comentário interno | Lê o chamado e pode o interno | Lê o chamado e não pode | Não lê o chamado |
 |---|---|---|---|
@@ -382,7 +385,7 @@ o histórico e os comentários. Decisões D1–D7, aprovadas em 29/10/2026:
 | Quem | Chamado da TI | Chamado da Qualidade |
 |---|---|---|
 | Administrador | lê | lê |
-| Técnico da TI (perfil Técnico, setor em `SETORES_TI_IDS`) — D1, D10 | lê | lê |
+| Técnico da TI (perfil Técnico, setor em `SETORES_TI_IDS`) — D1 revista na API-13, D10 | lê | só pelo vínculo |
 | Técnico da Qualidade (perfil Técnico no setor de `SETOR_QUALIDADE_ID`) — D2 | só pelo vínculo | lê |
 | Técnico de outro setor, ou sem setor — D10, H1 | só pelo vínculo | só pelo vínculo |
 | Solicitante | o próprio | o próprio |
@@ -422,10 +425,10 @@ o histórico e os comentários. Decisões D1–D7, aprovadas em 29/10/2026:
   `solicitante_id`, `tecnico_id`, `setor_destino`, `incluir_arquivados` e
   `incluir_cancelados` só estreitam o que a pessoa já pode ler.
 - **Histórico e comentários** seguem o chamado, também pelo id do registro.
-  Por cima vale a regra do comentário interno: só Administrador e Técnico da
-  TI o leem e o criam (API-8; até a API-7, todo perfil Técnico), e a
-  responsável de perfil Usuário não (D3). Ver "Administrador ou Técnico da
-  TI, nos chamados que lê", acima.
+  Por cima vale a regra do comentário interno: só o administrador humano e a
+  equipe do setor do chamado o leem e o criam (API-13; API-8 e API-7 antes), e
+  a responsável de perfil Usuário não (D3). Ver "A equipe do setor de destino
+  do chamado", acima.
 - **Comentar** exige que o chamado exista e que a pessoa possa lê-lo. Antes
   qualquer conta comentava em qualquer chamado; nenhum perfil ganhou
   comentário que não tinha. **Editar e excluir** (API-6, D11) exigem ver o
@@ -433,8 +436,10 @@ o histórico e os comentários. Decisões D1–D7, aprovadas em 29/10/2026:
   (API-8) —, e
   depois ser o autor ou administrador. Quem não vê recebe o 404 de um id que
   não existe, antes do 403 de autoria.
-- **A leitura não dá escrita.** Ler a Qualidade não dá ao técnico da TI o
-  atendimento dela, e o vínculo não dá poder de equipe — ver abaixo.
+- **A leitura não dá escrita.** O vínculo não dá poder de equipe: o técnico
+  da TI que abriu um chamado da Qualidade lê o chamado, e editar, arquivar ou
+  cancelar como equipe é 403 — ver abaixo. Até a API-12 o técnico da TI lia
+  toda a Qualidade (D1); a API-13 fechou essa leitura.
 - **Fora desta regra, de propósito (D7):** `GET /usuarios/` e
   `GET /usuarios/{id}` continuam abertos a qualquer autenticado — o frontend
   monta os nomes da tela com eles, em todos os perfis. A revisão do diretório
@@ -443,8 +448,8 @@ o histórico e os comentários. Decisões D1–D7, aprovadas em 29/10/2026:
 **Escrita de chamado pela equipe (API-6, D8 e D12):** `PUT /chamados/{id}`,
 `PATCH …/arquivar`, `PATCH …/desarquivar` e o cancelamento de chamado alheio
 só no **alcance do perfil** — o mesmo da leitura por perfil, sem o vínculo:
-administrador, todos; técnico da TI, TI e Qualidade; técnico da Qualidade,
-a Qualidade; os demais, nenhum. Conta de serviço, nenhum, qualquer que seja o
+administrador, todos; técnico da TI, a TI (até a API-12, TI e Qualidade);
+técnico da Qualidade, a Qualidade; os demais, nenhum. Conta de serviço, nenhum, qualquer que seja o
 perfil (API-11, S2).
 
 | Quem pede | Resposta |

@@ -12,6 +12,39 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Segurança — cada equipe no seu setor de destino (API-13)
+- **O técnico da TI deixa de ler e de alterar os chamados da Qualidade.**
+  Até a API-12, pela decisão D1, o perfil Técnico num setor de
+  `SETORES_TI_IDS` lia os dois setores de destino e, pelo mesmo alcance,
+  editava, arquivava, cancelava e via o interno dos chamados da Qualidade.
+  Agora o alcance dele é só a TI, como o do técnico da Qualidade já era só a
+  Qualidade (D2). Chamado da Qualidade que ele não lê responde o 404 de um id
+  que não existe (D6); o que ele lê pelo vínculo — abriu, ou é o responsável
+  — segue legível, e a escrita de equipe nele é 403 ("Este chamado não é da
+  sua equipe"). O administrador humano segue com os dois setores.
+- **Comentário interno é da equipe do setor do chamado.**
+  `pode_acessar_comentario_interno` passou a receber o chamado e é a mesma
+  regra de `pode_alterar_como_equipe`: administrador humano em todos, o
+  técnico da TI nos da TI, o técnico da Qualidade nos da Qualidade — que até
+  aqui não via interno nenhum (API-8). O vínculo não dá o interno, e conta de
+  serviço continua sem ele. Vale para listar, buscar, criar, editar e
+  excluir.
+- **Abertura sem `setor_destino` fica registrada.** O front 1.8.0 manda o
+  setor escolhido em toda abertura; a ausência, que só o front antigo produz,
+  continua valendo TI — para não quebrar a abertura entre o deploy da API e o
+  do front, nem num rollback do front — e agora deixa
+  `criar_chamado sem setor_destino (cliente antigo): gravado como TI` no log.
+  Valor inválido segue 422. Tornar o campo obrigatório é passo próprio, depois
+  que o log zerar.
+- Sem migration, sem variável nova. `integra_equipe_ti`, `require_equipe_ti`,
+  `/auth/me` e as regras de responsável da TI e da Qualidade não mudam.
+
+#### Ação necessária no deploy
+- Junto com a API-12 (mesmas migrations), **antes** do front 1.8.0. Para
+  publicar a Qualidade: `SETOR_QUALIDADE_ID` com o id do setor Qualidade, e as
+  contas que atendem a Qualidade no setor dele, com perfil Técnico para
+  atenderem como equipe.
+
 ### Corrigido — concorrência da TI com versão (API-12)
 - **Duas escritas da TI com a mesma versão não passam mais as duas.** Na
   API-11 o `PUT` da TI conferia `versao_esperada` sem travar a linha: duas
