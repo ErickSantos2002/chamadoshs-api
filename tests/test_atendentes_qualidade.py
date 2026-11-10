@@ -1,10 +1,11 @@
 """
 Quem pode atender chamado da Qualidade, e como a API descobre qual setor é ela.
 
-Elegível é a conta ativa, que não é conta de serviço e pertence ao setor
-configurado em `SETOR_QUALIDADE_ID` — com qualquer perfil. Não há política de
-perfis nova aqui: um técnico lotado na Qualidade é elegível, um técnico da TI
-não é.
+Elegível é a conta ativa, que não é conta de serviço, pertence ao setor
+configurado em `SETOR_QUALIDADE_ID` e tem perfil Técnico. Antes da API-13
+valia qualquer perfil do setor; desde ela o usuário comum e o administrador
+lotados na Qualidade são inelegíveis. Setor e perfil contam juntos: um técnico
+lotado na Qualidade é elegível, um técnico da TI não é.
 
 A regra mora em `qualidade_service`, e é a mesma função que filtra a lista de
 atendentes e que valida o responsável na abertura. Duas cópias da regra — uma
@@ -21,6 +22,7 @@ import pytest
 
 import main
 from app.core.config import Settings
+from app.models import Usuario
 from app.services import qualidade_service
 
 ROTA = "/api/v1/chamados/atendentes-qualidade"
@@ -90,13 +92,10 @@ class TestSetorDaQualidade:
 
 
 class TestElegibilidade:
-    @pytest.mark.parametrize(
-        "chave", ["atendente_id", "tecnico_da_qualidade_id", "admin_da_qualidade_id"]
-    )
-    def test_elegivel_com_qualquer_perfil(self, qualidade, sessao, chave):
-        atendente = qualidade_service.buscar_atendente(sessao, qualidade[chave])
+    def test_elegivel_so_tecnico(self, qualidade, sessao):
+        atendente = qualidade_service.buscar_atendente(sessao, qualidade["tecnico_da_qualidade_id"])
 
-        assert atendente.id == qualidade[chave]
+        assert atendente.id == qualidade["tecnico_da_qualidade_id"]
 
     def test_inexistente(self, qualidade, sessao):
         with pytest.raises(qualidade_service.AtendenteNaoEncontrado):
@@ -111,11 +110,32 @@ class TestElegibilidade:
             # Técnico da TI: perfil de atendimento, setor errado.
             "tecnico_id",
             "comum_id",
+            # API-13: setor certo, perfil errado (comum e administrador).
+            "atendente_id",
+            "admin_da_qualidade_id",
         ],
     )
     def test_inelegivel(self, qualidade, sessao, chave):
         with pytest.raises(qualidade_service.AtendenteInelegivel):
             qualidade_service.buscar_atendente(sessao, qualidade[chave])
+
+    @pytest.mark.parametrize(
+        "campo,valor", [("ativo", False), ("conta_de_servico", True)]
+    )
+    def test_tecnico_da_qualidade_inativo_ou_de_servico_e_inelegivel(
+        self, qualidade, sessao, campo, valor
+    ):
+        """
+        As contas inativa e de serviço do cenário têm perfil comum, que já as
+        recusa desde a API-13. Aqui o Técnico da Qualidade perde só ativo ou
+        ganha só conta_de_servico, para cada condição continuar provada sozinha.
+        """
+        tecnico = sessao.get(Usuario, qualidade["tecnico_da_qualidade_id"])
+        setattr(tecnico, campo, valor)
+        sessao.commit()
+
+        with pytest.raises(qualidade_service.AtendenteInelegivel):
+            qualidade_service.buscar_atendente(sessao, qualidade["tecnico_da_qualidade_id"])
 
     def test_sem_configuracao_fecha_antes_de_olhar_o_atendente(
         self, qualidade, sessao, monkeypatch
@@ -128,13 +148,18 @@ class TestElegibilidade:
 
 
 class TestRotaDeAtendentes:
-    def test_lista_so_os_elegiveis_ordenados_por_nome(self, cliente, qualidade, autenticar):
+    def test_lista_so_os_elegiveis_ordenados_por_nome(self, cliente, qualidade, sessao, autenticar):
+        # Um segundo Técnico da Qualidade, de nome anterior ao do bruno, para a
+        # ordem continuar provada: desde a API-13 aaron (administrador) e ana
+        # (comum) são da Qualidade e ficam fora da lista.
+        sessao.add(Usuario(id=46, nome="abel.qualidade", role_id=2, setor_id=2, ativo=True))
+        sessao.commit()
+
         resposta = cliente.get(ROTA, headers=_comum(autenticar, qualidade))
 
         assert resposta.status_code == 200
         assert resposta.json() == [
-            {"id": qualidade["admin_da_qualidade_id"], "nome": "aaron.qualidade"},
-            {"id": qualidade["atendente_id"], "nome": "ana.qualidade"},
+            {"id": 46, "nome": "abel.qualidade"},
             {"id": qualidade["tecnico_da_qualidade_id"], "nome": "bruno.qualidade"},
         ]
 

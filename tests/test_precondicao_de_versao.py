@@ -32,7 +32,8 @@ def _admin(autenticar, d):
 
 
 def _atendente(autenticar, d):
-    return autenticar(d["atendente_id"], "ana.qualidade", "Usuario")
+    # API-13: quem atende é o Técnico da Qualidade, e não mais a ana (comum).
+    return autenticar(d["tecnico_da_qualidade_id"], "bruno.qualidade", "Tecnico")
 
 
 def _chamado(sessao, chamado_id):
@@ -60,6 +61,21 @@ def _put(cliente, chamado_id, corpo, headers):
 
 def _atender(cliente, chamado_id, corpo, headers):
     return cliente.patch(f"/api/v1/chamados/{chamado_id}/atendimento", json=corpo, headers=headers)
+
+
+@pytest.fixture
+def chamado_qualidade(chamado_qualidade_do_tecnico, sessao):
+    """
+    O chamado da Qualidade do Técnico dela, mais um segundo Técnico da
+    Qualidade que não é o responsável.
+
+    O `chamado_qualidade` do conftest fica com a atendente de perfil comum,
+    estado anterior à API-13; desde a API-13 ela não atende.
+    """
+    d = chamado_qualidade_do_tecnico
+    sessao.add(Usuario(id=46, nome="beto.qualidade", role_id=2, setor_id=d["setor_qualidade_id"], ativo=True))
+    sessao.commit()
+    return {**d, "outro_tecnico_da_qualidade_id": 46}
 
 
 @pytest.fixture
@@ -228,7 +244,7 @@ class TestPrecedencia:
     @pytest.mark.parametrize("versao", [None, 9], ids=["sem-versao", "versao-antiga"])
     @pytest.mark.parametrize(
         "quem",
-        ["tecnico_da_qualidade_id", "inativo_id", "admin_id"],
+        ["outro_tecnico_da_qualidade_id", "inativo_id", "admin_id"],
         ids=["outro-da-qualidade", "inativo", "admin-nao-responsavel"],
     )
     def test_atendimento_de_quem_nao_e_o_responsavel_e_403_sem_revelar_a_versao(
@@ -246,7 +262,7 @@ class TestPrecedencia:
         self, cliente, chamado_qualidade, sessao, autenticar, webhook
     ):
         d = chamado_qualidade
-        sessao.get(Usuario, d["atendente_id"]).setor_id = 1
+        sessao.get(Usuario, d["tecnico_da_qualidade_id"]).setor_id = 1
         sessao.commit()
         resposta = _atender(
             cliente, d["chamado_qualidade_id"], {"status": "Em Andamento", "versao_esperada": 9}, _atendente(autenticar, d)

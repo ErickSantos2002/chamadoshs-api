@@ -90,6 +90,8 @@ def test_ex_responsavel_perde_os_comentarios(cliente, como, autenticar, sessao, 
     from app.models import Chamado
 
     cid = CHAMADOS["q_reatribuido"]
+    # Estado legado: a eva tem perfil comum e, desde a API-13, não seria
+    # atribuída pela API — por isso vai direto no banco, como antes dela.
     sessao.get(Chamado, cid).tecnico_responsavel_id = EX_RESPONSAVEL
     sessao.commit()
     eva = autenticar(EX_RESPONSAVEL, "eva.qualidade", "Usuario")
@@ -99,7 +101,9 @@ def test_ex_responsavel_perde_os_comentarios(cliente, como, autenticar, sessao, 
     r = cliente.put(
         f"{API}/chamados/{cid}",
         headers=como("admin"),
-        json={"tecnico_responsavel_id": cenario_de_leitura["atendente"], "versao_esperada": versao},
+        # API-13: o novo responsável é o Técnico da Qualidade; até a API-12
+        # era a ana, de perfil comum, que hoje a reatribuição recusa.
+        json={"tecnico_responsavel_id": cenario_de_leitura["tecnico_qualidade"], "versao_esperada": versao},
     )
     assert r.status_code == 200, r.text
 

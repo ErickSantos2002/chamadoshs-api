@@ -34,6 +34,11 @@ def _admin(autenticar, d):
     return autenticar(d["admin_id"], "admin.teste", "Administrador")
 
 
+def _tecnico_da_qualidade(autenticar, d):
+    """Desde a API-13 só o Técnico da Qualidade atende; até a API-12 era a ana, de perfil comum."""
+    return autenticar(d["tecnico_da_qualidade_id"], "bruno.qualidade", "Tecnico")
+
+
 def _confere(resposta, status=200):
     assert resposta.status_code == status, resposta.text
     corpo = resposta.json()
@@ -79,13 +84,13 @@ class TestTodaRespostaDeChamadoTrazVersao:
             )
         )
 
-    def test_atendimento(self, cliente, chamado_qualidade, autenticar):
-        d = chamado_qualidade
+    def test_atendimento(self, cliente, chamado_qualidade_do_tecnico, autenticar):
+        d = chamado_qualidade_do_tecnico
         _confere(
             cliente.patch(
                 f"/api/v1/chamados/{d['chamado_qualidade_id']}/atendimento",
                 json={"status": "Em Andamento", "versao_esperada": 1},
-                headers=autenticar(d["atendente_id"], "ana.qualidade", "Usuario"),
+                headers=_tecnico_da_qualidade(autenticar, d),
             )
         )
 
@@ -131,13 +136,13 @@ class TestOsCorposDeEscritaNaoMudaram:
         sessao.expire_all()
         assert sessao.get(Chamado, dados["chamado_id"]).versao == 1
 
-    def test_atendimento_recusa_versao_como_campo_a_mais(self, cliente, chamado_qualidade, autenticar):
+    def test_atendimento_recusa_versao_como_campo_a_mais(self, cliente, chamado_qualidade_do_tecnico, autenticar):
         """`extra="forbid"` no ChamadoAtendimento: o campo de escrita é `versao_esperada`."""
-        d = chamado_qualidade
+        d = chamado_qualidade_do_tecnico
         resposta = cliente.patch(
             f"/api/v1/chamados/{d['chamado_qualidade_id']}/atendimento",
             json={"status": "Em Andamento", "versao_esperada": 1, "versao": 1},
-            headers=autenticar(d["atendente_id"], "ana.qualidade", "Usuario"),
+            headers=_tecnico_da_qualidade(autenticar, d),
         )
         assert resposta.status_code == 422
         assert resposta.json()["detail"][0]["loc"] == ["body", "versao"]

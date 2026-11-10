@@ -104,7 +104,18 @@ def _admin(autenticar, d):
 
 
 def _atendente(autenticar, d):
-    return autenticar(d["atendente_id"], "ana.qualidade", "Usuario")
+    # API-13: quem atende é o Técnico da Qualidade, e não mais a ana (comum).
+    return autenticar(d["tecnico_da_qualidade_id"], "bruno.qualidade", "Tecnico")
+
+
+@pytest.fixture
+def chamado_qualidade(chamado_qualidade_do_tecnico):
+    """
+    Aqui o chamado da Qualidade é o do Técnico dela, gravado assim desde o
+    INSERT para a versão começar em 1. O `chamado_qualidade` do conftest fica
+    com a atendente de perfil comum, estado anterior à API-13.
+    """
+    return chamado_qualidade_do_tecnico
 
 
 def _estado(sessao, chamado_id):

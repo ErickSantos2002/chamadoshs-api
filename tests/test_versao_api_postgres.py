@@ -164,9 +164,10 @@ class TestPelasRotas:
         assert detalhe.json()["versao"] == 2
         assert [c["versao"] for c in listagem.json() if c["id"] == dados["chamado_id"]] == [2]
 
-    def test_atendimento_sobe_1(self, cliente, chamado_qualidade, sessao, autenticar):
-        d = chamado_qualidade
-        atendente = autenticar(d["atendente_id"], "ana.qualidade", "Usuario")
+    def test_atendimento_sobe_1(self, cliente, chamado_qualidade_do_tecnico, sessao, autenticar):
+        # API-13: quem atende é o Técnico da Qualidade, e não mais a ana (comum).
+        d = chamado_qualidade_do_tecnico
+        atendente = autenticar(d["tecnico_da_qualidade_id"], "bruno.qualidade", "Tecnico")
         url = f"/api/v1/chamados/{d['chamado_qualidade_id']}/atendimento"
 
         # A versão de cada escrita é a devolvida pela anterior, como o cliente faz.
@@ -183,13 +184,13 @@ class TestPelasRotas:
             3,
         )
 
-    def test_atendimento_recusado_nao_sobe(self, cliente, chamado_qualidade, sessao, autenticar):
-        d = chamado_qualidade
+    def test_atendimento_recusado_nao_sobe(self, cliente, chamado_qualidade_do_tecnico, sessao, autenticar):
+        d = chamado_qualidade_do_tecnico
         resposta = cliente.patch(
             f"/api/v1/chamados/{d['chamado_qualidade_id']}/atendimento",
             # Aberto → Resolvido: 409 de transição, com a versão certa.
             json={"status": "Resolvido", "solucao": SOLUCAO_OK, "versao_esperada": 1},
-            headers=autenticar(d["atendente_id"], "ana.qualidade", "Usuario"),
+            headers=autenticar(d["tecnico_da_qualidade_id"], "bruno.qualidade", "Tecnico"),
         )
         assert resposta.status_code == 409
         assert "codigo" not in resposta.json()

@@ -162,14 +162,19 @@ class TestExResponsavel:
     def test_reatribuir_tira_a_leitura_de_quem_saiu(self, cliente, como, autenticar, sessao, cenario_de_leitura):
         """
         D4, pela rota real: a eva atende o 103, a administradora passa o
-        chamado para a ana, e a eva deixa de ler — detalhe, listagem,
+        chamado para o bruno, e a eva deixa de ler — detalhe, listagem,
         e histórico (os comentários estão em
         `test_comentarios_por_chamado.py`).
+
+        Até a API-12 o novo responsável era a ana; desde a API-13 só o Técnico
+        da Qualidade é atribuível, e a ana, de perfil comum, seria recusada.
         """
         from app.models import Chamado
 
         cid = CHAMADOS["q_reatribuido"]
         chamado = sessao.get(Chamado, cid)
+        # Estado legado: a eva tem perfil comum e, desde a API-13, não seria
+        # atribuída pela API — por isso vai direto no banco, como antes dela.
         chamado.tecnico_responsavel_id = EX_RESPONSAVEL
         sessao.commit()
         eva = autenticar(EX_RESPONSAVEL, "eva.qualidade", "Usuario")
@@ -179,7 +184,10 @@ class TestExResponsavel:
         r = cliente.put(
             f"{API}/chamados/{cid}",
             headers=como("admin"),
-            json={"tecnico_responsavel_id": cenario_de_leitura["atendente"], "versao_esperada": antes.json()["versao"]},
+            json={
+                "tecnico_responsavel_id": cenario_de_leitura["tecnico_qualidade"],
+                "versao_esperada": antes.json()["versao"],
+            },
         )
         assert r.status_code == 200, r.text
 
@@ -264,11 +272,34 @@ class TestForaDoEscopo:
         )
         assert r.status_code == 403
 
-    def test_responsavel_continua_atendendo(self, cliente, como):
+    def test_responsavel_continua_atendendo(self, cliente, como, sessao, cenario_de_leitura):
+        # API-13: quem atende é o Técnico da Qualidade; o q_atribuido passa a
+        # ele, porque o do cenário está com a ana (estado legado).
+        from app.models import Chamado
+
+        chamado = sessao.get(Chamado, CHAMADOS["q_atribuido"])
+        chamado.tecnico_responsavel_id = cenario_de_leitura["tecnico_qualidade"]
+        sessao.commit()
+        # A versão gravada, e não 1: no PostgreSQL o trigger sobe a versão com a
+        # troca de responsável feita acima.
+        sessao.refresh(chamado)
+        r = cliente.patch(
+            f"{API}/chamados/{CHAMADOS['q_atribuido']}/atendimento",
+            headers=como("tecnico_qualidade"),
+            json={"status": "Em Andamento", "versao_esperada": chamado.versao},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "Em Andamento"
+
+    def test_responsavel_de_perfil_comum_nao_atende(self, cliente, como):
+        """
+        API-13: a ana segue lendo o q_atribuido, de que é a responsável
+        (estado legado), mas não atende — não é Técnico. Até a API-12 atendia.
+        """
         r = cliente.patch(
             f"{API}/chamados/{CHAMADOS['q_atribuido']}/atendimento",
             headers=como("atendente"),
             json={"status": "Em Andamento", "versao_esperada": 1},
         )
-        assert r.status_code == 200, r.text
-        assert r.json()["status"] == "Em Andamento"
+        assert r.status_code == 403
+        assert r.json() == {"detail": "Você não atende a Qualidade"}

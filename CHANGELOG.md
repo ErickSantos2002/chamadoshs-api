@@ -36,14 +36,26 @@ cada versão lista o que precisa ser feito além de subir a imagem.
   `criar_chamado sem setor_destino (cliente antigo): gravado como TI` no log.
   Valor inválido segue 422. Tornar o campo obrigatório é passo próprio, depois
   que o log zerar.
+- **Responsável da Qualidade só pode ser Técnico da Qualidade.** Quem abre
+  um chamado da Qualidade escolhe o responsável, e ele nasce atribuído; a
+  elegibilidade (`qualidade_service.eh_elegivel`) passou a exigir o perfil
+  Técnico, além de conta ativa, que não é de serviço, no setor de
+  `SETOR_QUALIDADE_ID`. Até aqui valia qualquer perfil do setor: o usuário
+  comum lotado na Qualidade era oferecido e aceito como responsável sem ser
+  da equipe (não edita nem vê o interno), e o administrador do setor também.
+  Vale na lista `GET /chamados/atendentes-qualidade`, na abertura e na
+  reatribuição (400 `Atendente não é elegível para a Qualidade`) e na rota de
+  atendimento (403 `Você não atende a Qualidade`).
 - Sem migration, sem variável nova. `integra_equipe_ti`, `require_equipe_ti`,
-  `/auth/me` e as regras de responsável da TI e da Qualidade não mudam.
+  `/auth/me` e a regra de responsável da TI não mudam.
 
 #### Ação necessária no deploy
 - Junto com a API-12 (mesmas migrations), **antes** do front 1.8.0. Para
   publicar a Qualidade: `SETOR_QUALIDADE_ID` com o id do setor Qualidade, e as
-  contas que atendem a Qualidade no setor dele, com perfil Técnico para
-  atenderem como equipe.
+  contas que atendem a Qualidade no setor dele, com perfil Técnico — sem
+  isso elas não aparecem como responsáveis, e com nenhuma elegível a
+  abertura para a Qualidade fica desabilitada no front ("Nenhum atendente da
+  Qualidade cadastrado").
 
 ### Corrigido — concorrência da TI com versão (API-12)
 - **Duas escritas da TI com a mesma versão não passam mais as duas.** Na

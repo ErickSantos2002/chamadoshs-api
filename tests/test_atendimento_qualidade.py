@@ -1,10 +1,12 @@
 """
 Atendimento de chamado da Qualidade: `PATCH /chamados/{id}/atendimento`.
 
-Rota própria porque quem atende a Qualidade costuma ter perfil comum, e o PUT
-é da equipe e vai continuar sendo — por ele dá para mexer em responsável,
-prioridade e categoria. Aqui o corpo tem só `status` e `solucao`, e tudo o
-mais é recusado.
+Rota própria porque quem atende a Qualidade tinha, até a API-12, perfil comum,
+e o PUT é da equipe e vai continuar sendo — por ele dá para mexer em
+responsável, prioridade e categoria. Aqui o corpo tem só `status` e `solucao`,
+e tudo o mais é recusado. Desde a API-13 só o Técnico do setor da Qualidade é
+elegível: o usuário comum e o administrador lotados nela são recusados mesmo
+quando gravados como responsáveis (estado legado).
 
 A autorização não vem do perfil: vem do chamado e de quem pede, relidos do
 banco a cada requisição. Atende quem é elegível para a Qualidade (mesma regra
@@ -36,7 +38,8 @@ SOLUCAO_OK = "Laudo reemitido com a assinatura do responsável"
 
 
 def _atendente(autenticar, d):
-    return autenticar(d["atendente_id"], "ana.qualidade", "Usuario")
+    # API-13: quem atende é o Técnico da Qualidade, e não mais a ana (comum).
+    return autenticar(d["tecnico_da_qualidade_id"], "bruno.qualidade", "Tecnico")
 
 
 def _patch(cliente, chamado_id, corpo, headers):
@@ -78,13 +81,39 @@ def webhook(monkeypatch):
 
 
 @pytest.fixture
+def chamado_qualidade(chamado_qualidade_do_tecnico):
+    """
+    Aqui o chamado da Qualidade é o do Técnico dela.
+
+    O `chamado_qualidade` do conftest fica com a atendente de perfil comum,
+    estado anterior à API-13; desde a API-13 ela não atende, e o responsável
+    destes testes é o único perfil elegível.
+    """
+    return chamado_qualidade_do_tecnico
+
+
+OUTRO_TECNICO_DA_QUALIDADE = 46
+
+
+@pytest.fixture
+def outro_tecnico(chamado_qualidade, sessao):
+    """Um segundo Técnico da Qualidade: elegível, mas não o responsável."""
+    sessao.add(Usuario(
+        id=OUTRO_TECNICO_DA_QUALIDADE, nome="beto.qualidade", role_id=2,
+        setor_id=chamado_qualidade["setor_qualidade_id"], ativo=True,
+    ))
+    sessao.commit()
+    return OUTRO_TECNICO_DA_QUALIDADE
+
+
+@pytest.fixture
 def intacto(chamado_qualidade, sessao):
     """Confere, depois do teste, que o chamado e o histórico não mudaram."""
     d = chamado_qualidade
     yield
     chamado = _chamado(sessao, d["chamado_qualidade_id"])
     assert chamado.status == "Aberto"
-    assert chamado.tecnico_responsavel_id == d["atendente_id"]
+    assert chamado.tecnico_responsavel_id == d["tecnico_da_qualidade_id"]
     assert chamado.solucao is None
     assert chamado.data_resolucao is None
     assert chamado.prioridade == "Média"
@@ -104,7 +133,7 @@ class TestAutenticacao:
 
     def test_usuario_inativo_e_403(self, cliente, chamado_qualidade, sessao, autenticar, intacto):
         d = chamado_qualidade
-        sessao.get(Usuario, d["atendente_id"]).ativo = False
+        sessao.get(Usuario, d["tecnico_da_qualidade_id"]).ativo = False
         sessao.commit()
 
         resposta = _patch(cliente, d["chamado_qualidade_id"], INICIAR, _atendente(autenticar, d))
@@ -124,20 +153,26 @@ class TestAutorizacao:
     @pytest.mark.parametrize(
         "chave, nome, role",
         [
-            ("tecnico_da_qualidade_id", "bruno.qualidade", "Tecnico"),
             ("admin_da_qualidade_id", "aaron.qualidade", "Administrador"),
+            ("atendente_id", "ana.qualidade", "Usuario"),
         ],
-        ids=["tecnico", "administrador"],
+        ids=["administrador-da-qualidade", "comum-da-qualidade"],
     )
-    def test_equipe_da_qualidade_atende_quando_responsavel(
+    def test_da_qualidade_sem_perfil_tecnico_e_403_mesmo_responsavel(
         self, cliente, chamado_qualidade, sessao, autenticar, webhook, chave, nome, role
     ):
+        # API-13: setor certo, perfil errado. Gravado como responsável por SQL
+        # direto ou antes da API-13 (até ela o administrador e o comum da
+        # Qualidade atendiam), e a rota recusa: confere quem pede, não o campo.
         d = chamado_qualidade
         _altera(sessao, d["chamado_qualidade_id"], tecnico_responsavel_id=d[chave])
 
         resposta = _patch(cliente, d["chamado_qualidade_id"], INICIAR, autenticar(d[chave], nome, role))
 
-        assert resposta.status_code == 200
+        assert resposta.status_code == 403
+        assert resposta.json()["detail"] == "Você não atende a Qualidade"
+        assert _chamado(sessao, d["chamado_qualidade_id"]).status == "Aberto"
+        assert _historicos(sessao, d["chamado_qualidade_id"]) == []
 
     def test_chamado_inexistente_e_404(self, cliente, chamado_qualidade, autenticar):
         resposta = _patch(cliente, 9999, INICIAR, _atendente(autenticar, chamado_qualidade))
@@ -147,7 +182,7 @@ class TestAutorizacao:
         self, cliente, chamado_qualidade, sessao, autenticar, webhook
     ):
         d = chamado_qualidade
-        _altera(sessao, d["chamado_id"], tecnico_responsavel_id=d["atendente_id"])
+        _altera(sessao, d["chamado_id"], tecnico_responsavel_id=d["tecnico_da_qualidade_id"])
 
         resposta = _patch(cliente, d["chamado_id"], INICIAR, _atendente(autenticar, d))
 
@@ -175,10 +210,12 @@ class TestAutorizacao:
         [
             ("admin_id", "admin.teste", "Administrador"),
             ("comum_id", "usuario.teste", "Usuario"),
+            # API-13: lotado na Qualidade, mas administrador não é elegível.
+            ("admin_da_qualidade_id", "aaron.qualidade", "Administrador"),
         ],
-        ids=["admin-da-ti", "solicitante"],
+        ids=["admin-da-ti", "solicitante", "admin-da-qualidade"],
     )
-    def test_quem_nao_e_da_qualidade_e_403(
+    def test_quem_nao_atende_a_qualidade_e_403(
         self, cliente, chamado_qualidade, autenticar, intacto, chave, nome, role
     ):
         d = chamado_qualidade
@@ -218,26 +255,22 @@ class TestAutorizacao:
         assert resposta.status_code == 403
         assert _chamado(sessao, d["chamado_qualidade_id"]).status == "Aberto"
 
-    @pytest.mark.parametrize(
-        "chave, nome, role",
-        [
-            ("tecnico_da_qualidade_id", "bruno.qualidade", "Tecnico"),
-            ("admin_da_qualidade_id", "aaron.qualidade", "Administrador"),
-        ],
-        ids=["tecnico-da-qualidade", "admin-da-qualidade"],
-    )
     def test_elegivel_que_nao_e_o_responsavel_e_403(
-        self, cliente, chamado_qualidade, autenticar, intacto, chave, nome, role
+        self, cliente, chamado_qualidade, autenticar, intacto, outro_tecnico
     ):
+        # Até a API-12 o administrador da Qualidade também entrava aqui; desde
+        # a API-13 ele nem é elegível (ver `test_quem_nao_atende_a_qualidade_e_403`).
         d = chamado_qualidade
-        resposta = _patch(cliente, d["chamado_qualidade_id"], INICIAR, autenticar(d[chave], nome, role))
+        resposta = _patch(
+            cliente, d["chamado_qualidade_id"], INICIAR, autenticar(outro_tecnico, "beto.qualidade", "Tecnico")
+        )
 
         assert resposta.status_code == 403
         assert resposta.json()["detail"] == "Só o responsável atual pode atender este chamado"
 
     def test_responsavel_que_mudou_de_setor_e_403(self, cliente, chamado_qualidade, sessao, autenticar, intacto):
         d = chamado_qualidade
-        sessao.get(Usuario, d["atendente_id"]).setor_id = 1
+        sessao.get(Usuario, d["tecnico_da_qualidade_id"]).setor_id = 1
         sessao.commit()
 
         resposta = _patch(cliente, d["chamado_qualidade_id"], INICIAR, _atendente(autenticar, d))
@@ -249,7 +282,7 @@ class TestAutorizacao:
         self, cliente, chamado_qualidade, sessao, autenticar, intacto
     ):
         d = chamado_qualidade
-        sessao.get(Usuario, d["atendente_id"]).conta_de_servico = True
+        sessao.get(Usuario, d["tecnico_da_qualidade_id"]).conta_de_servico = True
         sessao.commit()
 
         resposta = _patch(cliente, d["chamado_qualidade_id"], INICIAR, _atendente(autenticar, d))
@@ -488,7 +521,7 @@ class TestEfeitos:
             (h.acao, h.descricao, h.status_anterior, h.status_novo, h.usuario_id) for h in historicos
         ] == [
             ("Alteração de status", "Status alterado de Aberto para Em Andamento", "Aberto", "Em Andamento",
-             d["atendente_id"]),
+             d["tecnico_da_qualidade_id"]),
         ]
 
     def test_resolver_grava_solucao_data_e_tempo(self, cliente, chamado_qualidade, sessao, autenticar, webhook):
@@ -680,38 +713,40 @@ class TestConcorrencia:
         assert len(chamadas) == 1 and "FOR UPDATE" in chamadas[0]
 
     def test_responsavel_anterior_e_recusado_depois_da_reatribuicao(
-        self, cliente, chamado_qualidade, sessao, autenticar, webhook
+        self, cliente, chamado_qualidade, sessao, autenticar, webhook, outro_tecnico
     ):
         d = chamado_qualidade
         cabecalho_anterior = _atendente(autenticar, d)
         assert _patch(cliente, d["chamado_qualidade_id"], INICIAR, cabecalho_anterior).status_code == 200
 
-        # A equipe da Qualidade reatribui (API-13): até a API-12 este PUT era
-        # do técnico da TI, que hoje nem lê o chamado.
-        equipe = autenticar(d["tecnico_da_qualidade_id"], "bruno.qualidade", "Tecnico")
+        # A equipe da Qualidade reatribui (API-13) — aqui o próprio bruno, que
+        # é dela. Até a API-12 este PUT era do técnico da TI, que hoje nem lê
+        # o chamado.
         reatribuicao = cliente.put(
             f"/api/v1/chamados/{d['chamado_qualidade_id']}",
             json=com_versao_lida(
-                cliente, d["chamado_qualidade_id"], {"tecnico_responsavel_id": d["tecnico_da_qualidade_id"]}, equipe
+                cliente, d["chamado_qualidade_id"], {"tecnico_responsavel_id": outro_tecnico}, cabecalho_anterior
             ),
-            headers=equipe,
+            headers=cabecalho_anterior,
         )
         assert reatribuicao.status_code == 200
 
         resposta = _patch(cliente, d["chamado_qualidade_id"], {"status": "Aguardando"}, cabecalho_anterior)
 
-        # 404, e não o 403 "Só o responsável atual": com a reatribuição ela
-        # perdeu a leitura (D4), e quem não lê ouve o mesmo de um id que não
-        # existe (API-6, D12).
-        assert resposta.status_code == 404
-        assert resposta.json() == {"detail": "Chamado não encontrado"}
+        # Desde a API-13 o responsável anterior é Técnico da Qualidade e segue
+        # lendo o chamado pelo perfil: a recusa é o 403 de quem não é o
+        # responsável atual. Até a API-12 era a ana, de perfil comum, que
+        # perdia a leitura (D4) e ouvia 404 — a perda da leitura do
+        # ex-responsável comum segue provada em `test_leitura_por_chamado.py`.
+        assert resposta.status_code == 403
+        assert resposta.json() == {"detail": "Só o responsável atual pode atender este chamado"}
         chamado = _chamado(sessao, d["chamado_qualidade_id"])
         assert chamado.status == "Em Andamento"
-        assert chamado.tecnico_responsavel_id == d["tecnico_da_qualidade_id"]
+        assert chamado.tecnico_responsavel_id == outro_tecnico
         assert len(_historicos(sessao, d["chamado_qualidade_id"])) == 1
 
         novo = _patch(
             cliente, d["chamado_qualidade_id"], {"status": "Aguardando"},
-            autenticar(d["tecnico_da_qualidade_id"], "bruno.qualidade", "Tecnico"),
+            autenticar(outro_tecnico, "beto.qualidade", "Tecnico"),
         )
         assert novo.status_code == 200

@@ -33,7 +33,7 @@ from sqlalchemy.orm import sessionmaker
 import main
 from app.api.deps import get_db
 from app.api.endpoints import chamados as chamados_endpoint
-from app.models import Chamado
+from app.models import Chamado, Usuario
 from app.models.historico import HistoricoChamado
 from app.models.sla_config import SLAConfig
 from app.schemas.sla import SLAInfo
@@ -47,6 +47,9 @@ pytestmark = pytest.mark.postgres
 
 QUALIDADE = 101
 SOLUCAO = "Laudo reemitido com a assinatura do responsável"
+# Um segundo Técnico da Qualidade, para as reatribuições terem um destino
+# elegível que não é o responsável (API-13: só o Técnico dela é elegível).
+OUTRO_TECNICO_DA_QUALIDADE = 46
 
 
 # --------------------------------------------------------------------------
@@ -131,9 +134,21 @@ def pausa(monkeypatch):
 
 
 @pytest.fixture
-def base(chamado_qualidade, sessao, webhook):
-    """O cenário da Qualidade com o webhook interceptado, e a versão inicial."""
-    return {**chamado_qualidade, "v0": _estado(sessao)["versao"]}
+def base(chamado_qualidade_do_tecnico, sessao, webhook):
+    """
+    O cenário da Qualidade com o webhook interceptado, e a versão inicial.
+
+    O responsável é o Técnico da Qualidade, o único que atende desde a API-13
+    (até a API-12 era a ana, de perfil comum), e há um segundo Técnico dela
+    como destino das reatribuições.
+    """
+    d = chamado_qualidade_do_tecnico
+    sessao.add(Usuario(
+        id=OUTRO_TECNICO_DA_QUALIDADE, nome="beto.qualidade", role_id=2,
+        setor_id=d["setor_qualidade_id"], ativo=True,
+    ))
+    sessao.commit()
+    return {**d, "outro_tecnico_da_qualidade_id": OUTRO_TECNICO_DA_QUALIDADE, "v0": _estado(sessao)["versao"]}
 
 
 # --------------------------------------------------------------------------
@@ -170,7 +185,8 @@ def _admin(autenticar, d):
 
 
 def _atendente(autenticar, d):
-    return autenticar(d["atendente_id"], "ana.qualidade", "Usuario")
+    # API-13: quem atende é o Técnico da Qualidade, e não mais a ana (comum).
+    return autenticar(d["tecnico_da_qualidade_id"], "bruno.qualidade", "Tecnico")
 
 
 def _put(cliente, corpo, headers, chamado_id=QUALIDADE):
@@ -288,12 +304,17 @@ class TestT3PutEPatchDesatualizado:
 
 class TestT4DuasReatribuicoes:
     def test_so_a_primeira_reatribuicao_vale(self, cliente, base, sessao, autenticar, url_do_banco, pausa, webhook):
-        d, v0 = base, base["v0"]
+        d = base
+        # Estado legado (antes da API-13): a ana, de perfil comum, volta a ser
+        # a responsável, para as duas reatribuições irem a Técnicos elegíveis
+        # diferentes dela. Até a API-12 a segunda ia ao administrador da
+        # Qualidade, que desde a API-13 não é elegível.
+        v0 = _gravar(sessao, tecnico_responsavel_id=d["atendente_id"])
         admin = _admin(autenticar, d)
         a, b = _cena(
             url_do_banco, pausa,
             lambda: _put(cliente, {"tecnico_responsavel_id": d["tecnico_da_qualidade_id"], "versao_esperada": v0}, admin),
-            lambda: _put(cliente, {"tecnico_responsavel_id": d["admin_da_qualidade_id"], "versao_esperada": v0}, admin),
+            lambda: _put(cliente, {"tecnico_responsavel_id": d["outro_tecnico_da_qualidade_id"], "versao_esperada": v0}, admin),
         )
 
         assert _ok(a)["tecnico_responsavel_id"] == d["tecnico_da_qualidade_id"]
@@ -450,19 +471,24 @@ class TestReatribuicaoEAtendimento:
         d, v0 = base, base["v0"]
         a, b = _cena(
             url_do_banco, pausa,
-            lambda: _put(cliente, {"tecnico_responsavel_id": d["tecnico_da_qualidade_id"], "versao_esperada": v0}, _admin(autenticar, d)),
+            lambda: _put(
+                cliente, {"tecnico_responsavel_id": d["outro_tecnico_da_qualidade_id"], "versao_esperada": v0},
+                _admin(autenticar, d),
+            ),
             lambda: _atender(cliente, {"status": "Em Andamento", "versao_esperada": v0}, _atendente(autenticar, d)),
         )
 
         _ok(a)
-        # A leitura, relida sob o lock, vem antes da versão: com a reatribuição
-        # ela perdeu o chamado (D4), e ouve o 404 de um id que não existe (API-6,
-        # D12) — era o 403 "Só o responsável atual". Sem versao_atual.
-        assert b.status_code == 404
-        assert b.json() == {"detail": "Chamado não encontrado"}
+        # A autorização, relida sob o lock, vem antes da versão. Desde a API-13
+        # o antigo responsável é Técnico da Qualidade e segue lendo o chamado
+        # pelo perfil: ouve o 403 "Só o responsável atual", sem versao_atual.
+        # Até a API-12 era a ana, de perfil comum, que perdia a leitura (D4) e
+        # ouvia o 404 de um id que não existe (API-6, D12).
+        assert b.status_code == 403
+        assert b.json() == {"detail": "Só o responsável atual pode atender este chamado"}
         estado = _estado(sessao)
         assert (estado["tecnico_responsavel_id"], estado["status"], estado["historicos"]) == (
-            d["tecnico_da_qualidade_id"], "Aberto", [],
+            d["outro_tecnico_da_qualidade_id"], "Aberto", [],
         )
 
     def test_atendimento_primeiro_a_reatribuicao_antiga_e_409(
@@ -473,24 +499,27 @@ class TestReatribuicaoEAtendimento:
         a, b = _cena(
             url_do_banco, pausa,
             lambda: _atender(cliente, {"status": "Em Andamento", "versao_esperada": v0}, _atendente(autenticar, d)),
-            lambda: _put(cliente, {"tecnico_responsavel_id": d["tecnico_da_qualidade_id"], "versao_esperada": v0}, admin),
+            lambda: _put(cliente, {"tecnico_responsavel_id": d["outro_tecnico_da_qualidade_id"], "versao_esperada": v0}, admin),
         )
 
         _ok(a)
         assert b.status_code == 409 and b.json() == _desatualizada(v0 + 1)
-        assert _estado(sessao)["tecnico_responsavel_id"] == d["atendente_id"]
+        assert _estado(sessao)["tecnico_responsavel_id"] == d["tecnico_da_qualidade_id"]
 
         # Com a versão nova: a elegibilidade continua valendo...
         inelegivel = _put(cliente, {"tecnico_responsavel_id": d["inativo_id"], "versao_esperada": v0 + 1}, admin)
         assert inelegivel.status_code == 400
         # ...a reatribuição válida passa, e o antigo responsável deixa de atender.
-        _ok(_put(cliente, {"tecnico_responsavel_id": d["tecnico_da_qualidade_id"], "versao_esperada": v0 + 1}, admin))
+        _ok(_put(cliente, {"tecnico_responsavel_id": d["outro_tecnico_da_qualidade_id"], "versao_esperada": v0 + 1}, admin))
         antigo = _atender(cliente, {"status": "Aguardando", "versao_esperada": v0 + 2}, _atendente(autenticar, d))
-        # 404 desde a API-6 (D12): sem a atribuição, ela não lê mais o chamado.
-        assert antigo.status_code == 404 and antigo.json() == {"detail": "Chamado não encontrado"}
+        # Desde a API-13 o antigo responsável é Técnico da Qualidade e segue
+        # lendo pelo perfil: 403 de quem não é o responsável atual. Até a
+        # API-12 era a ana, de perfil comum, que perdia a leitura e ouvia 404.
+        assert antigo.status_code == 403
+        assert antigo.json() == {"detail": "Só o responsável atual pode atender este chamado"}
         estado = _estado(sessao)
         assert (estado["tecnico_responsavel_id"], estado["status"], estado["versao"]) == (
-            d["tecnico_da_qualidade_id"], "Em Andamento", v0 + 2,
+            d["outro_tecnico_da_qualidade_id"], "Em Andamento", v0 + 2,
         )
 
 
@@ -631,7 +660,7 @@ class TestT9PutDeVariosCamposDesatualizado:
             "prioridade": "Crítica",
             "urgencia": "Urgente",
             "status": "Em Andamento",
-            "tecnico_responsavel_id": d["tecnico_da_qualidade_id"],
+            "tecnico_responsavel_id": d["outro_tecnico_da_qualidade_id"],
             "solucao": SOLUCAO,
             "observacoes": "edição em cima de dado velho",
             "avaliacao": 3,
@@ -894,9 +923,13 @@ class TestSegurancaDaVersao:
             assert "versao_atual" not in resposta.json()
 
     def test_403_por_perfil_ou_autoria_nao_diz_a_versao(self, cliente, base, sessao, autenticar):
-        v1 = _gravar(sessao, prioridade="Alta")
+        # A ana, de perfil comum, volta a responsável por SQL (estado legado,
+        # anterior à API-13): ela lê o chamado e não pode escrever por perfil
+        # nem por autoria. O Técnico da Qualidade, que hoje atende, é da equipe
+        # e escreveria — não serve para este caso.
+        v1 = _gravar(sessao, prioridade="Alta", tecnico_responsavel_id=base["atendente_id"])
         comum = autenticar(base["comum_id"], "usuario.teste", "Usuario")
-        atendente = _atendente(autenticar, base)
+        atendente = autenticar(base["atendente_id"], "ana.qualidade", "Usuario")
         for resposta in (
             _marca(cliente, "arquivar", {"versao_esperada": v1 - 1}, comum),
             _put(cliente, {"status": "Em Andamento", "versao_esperada": v1 - 1}, atendente),
@@ -916,7 +949,7 @@ class TestSegurancaDaVersao:
             lambda: _put(cliente, {"prioridade": "Alta", "versao_esperada": v0}, _admin(autenticar, d)),
             lambda: _atender(
                 cliente, {"status": "Em Andamento", "versao_esperada": v0},
-                autenticar(d["tecnico_da_qualidade_id"], "bruno.qualidade", "Tecnico"),
+                autenticar(d["outro_tecnico_da_qualidade_id"], "beto.qualidade", "Tecnico"),
             ),
         )
 

@@ -50,8 +50,12 @@ RESPONSAVEL = {
     "ti_com_tecnico_da_q": "tecnico_qualidade",
 }
 QUALIDADE = {"q_atribuido", "q_reatribuido"}
-# Elegíveis para a Qualidade: setor dela, ativos, sem conta de serviço — qualquer perfil.
-ELEGIVEIS_DA_QUALIDADE = {"atendente", "tecnico_qualidade", "admin_da_qualidade", "ex_responsavel"}
+# Elegíveis para a Qualidade: setor dela, ativos, sem conta de serviço e com
+# perfil Técnico (API-13). Até a API-12 valia qualquer perfil, e entravam
+# também a atendente e a ex-responsável (comuns) e o administrador da
+# Qualidade. Com isso a atendente, responsável do q_atribuido e do
+# q_reatribuido no cenário (estado legado), passa a receber 403 no atendimento.
+ELEGIVEIS_DA_QUALIDADE = {"tecnico_qualidade"}
 
 OPERACOES = ["put", "put_versao_velha", "cancelar", "arquivar", "desarquivar", "avaliar", "atendimento"]
 ALVOS = sorted(CHAMADOS) + ["inexistente"]

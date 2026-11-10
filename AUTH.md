@@ -479,10 +479,18 @@ trocado sozinho. A regra mora em `responsavel_ti_service`, e
 `GET /chamados/responsaveis-ti` (`require_equipe_ti`, só `id` e `nome`)
 devolve exatamente quem ela aceita: é a lista que o seletor deve oferecer.
 
+**Responsável de chamado da Qualidade (API-13):** quem abre escolhe, e o
+chamado nasce atribuído. Só conta com perfil **Técnico**, ativa, que não seja
+conta de serviço e lotada no setor de `SETOR_QUALIDADE_ID`; senão 400
+`"Atendente não é elegível para a Qualidade"` — o usuário comum e o
+administrador do setor também (até a API-12 valia qualquer perfil do setor).
+A regra mora em `qualidade_service.eh_elegivel`, e
+`GET /chamados/atendentes-qualidade` devolve exatamente quem ela aceita.
+
 **Pelo chamado, não pelo perfil:** `PATCH /chamados/{id}/atendimento` — mudar
 o status e registrar a solução de um chamado da Qualidade. Só o responsável
-atual, e só se a conta for elegível para a Qualidade (ativa, não conta de
-serviço, do setor configurado), conferido no banco a cada requisição. Perfil
+atual, e só se a conta for elegível para a Qualidade (Técnico, ativa, não
+conta de serviço, do setor configurado), conferido no banco a cada requisição. Perfil
 não dá passe: administrador e técnico que não cumprem as duas condições
 recebem 403 e usam o `PUT`. O corpo aceita só `status` e `solucao`; qualquer
 outro campo é 422. Avaliar (`PATCH /chamados/{id}/avaliar`, só o solicitante)

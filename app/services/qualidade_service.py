@@ -6,10 +6,14 @@ formulário, a validação do responsável na abertura e na reatribuição, e a
 autorização de quem atende passam todas por `eh_elegivel`. Duas cópias da
 regra seriam o caminho para o seletor oferecer alguém que a gravação recusa.
 
-Elegível é a conta ativa, que não é conta de serviço e pertence ao setor
-configurado em `SETOR_QUALIDADE_ID` — com qualquer perfil. Perfil não entra
-na regra: quem atende a Qualidade é quem trabalha nela, e um técnico da TI
-não passa a atender a Qualidade por ter perfil de atendimento.
+Elegível é a conta ativa, que não é conta de serviço, pertence ao setor
+configurado em `SETOR_QUALIDADE_ID` e tem perfil Técnico (API-13). O setor
+sozinho não basta desde a API-13: o usuário comum lotado na Qualidade não é
+da equipe — não edita nem vê o interno dos chamados dela
+(`pode_alterar_como_equipe`) —, e o administrador não é escolhido como
+responsável. Antes valia qualquer perfil do setor. O perfil sozinho também
+não: um técnico da TI não passa a atender a Qualidade por ter perfil de
+atendimento.
 
 Sem HTTP aqui, como nos outros serviços: as falhas saem como exceções de
 domínio, e o endpoint decide o código de resposta.
@@ -20,6 +24,7 @@ from typing import List
 
 from sqlalchemy.orm import Session
 
+from app.api.deps import is_admin, is_staff
 from app.core.config import settings
 from app.models.chamado import Chamado
 from app.models.setor import Setor
@@ -80,7 +85,8 @@ def setor_qualidade(db: Session) -> Setor:
 
 def eh_elegivel(usuario: Usuario, setor: Setor) -> bool:
     """A regra de elegibilidade, num lugar só."""
-    return bool(usuario.ativo) and not usuario.conta_de_servico and usuario.setor_id == setor.id
+    eh_tecnico = is_staff(usuario) and not is_admin(usuario)
+    return bool(usuario.ativo) and not usuario.conta_de_servico and usuario.setor_id == setor.id and eh_tecnico
 
 
 def listar_atendentes(db: Session) -> List[Usuario]:

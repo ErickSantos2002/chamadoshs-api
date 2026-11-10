@@ -4,7 +4,9 @@ Abertura de chamado para a Qualidade.
 O formulário da Qualidade tem descrição, prioridade e responsável — sem título
 e sem categoria. A API completa o que falta: o título sai da descrição, a
 categoria fica nula, e o responsável escolhido é validado contra a regra de
-elegibilidade (ver `test_atendentes_qualidade.py`).
+elegibilidade (ver `test_atendentes_qualidade.py`). Desde a API-13 só o
+Técnico ativo do setor da Qualidade é escolhido: o usuário comum e o
+administrador lotados nela são recusados com 400.
 
 A TI não muda em nada, e isso é o que mais se testa aqui: o corpo de TI passa
 pela mesma classe `ChamadoCreate` de antes, e os erros de validação dela são
@@ -46,7 +48,7 @@ def corpo_qualidade(dados, **sobrescreve):
         "setor_destino": "QUALIDADE",
         "descricao": DESCRICAO_OK,
         "solicitante_id": dados["comum_id"],
-        "tecnico_responsavel_id": dados["atendente_id"],
+        "tecnico_responsavel_id": dados["tecnico_da_qualidade_id"],
     }
     base.update(sobrescreve)
     return base
@@ -290,14 +292,14 @@ class TestCriacaoDaQualidade:
         assert criado["descricao"] == descricao
         assert criado["categoria_id"] is None
         assert criado["prioridade"] == "Alta"
-        assert criado["tecnico_responsavel_id"] == qualidade["atendente_id"]
+        assert criado["tecnico_responsavel_id"] == qualidade["tecnico_da_qualidade_id"]
         assert criado["solicitante_id"] == qualidade["comum_id"]
         assert criado["status"] == "Aberto"
 
         gravado = sessao.get(Chamado, criado["id"])
         sessao.refresh(gravado)
         assert gravado.setor_destino == "QUALIDADE"
-        assert gravado.tecnico_responsavel_id == qualidade["atendente_id"]
+        assert gravado.tecnico_responsavel_id == qualidade["tecnico_da_qualidade_id"]
         assert gravado.categoria_id is None
 
     def test_prioridade_padrao_e_a_de_hoje(self, cliente, qualidade, autenticar):
@@ -326,21 +328,19 @@ class TestCriacaoDaQualidade:
         assert historico.usuario_id == qualidade["comum_id"]
         assert historico.descricao == (
             f"Chamado aberto com protocolo {resposta.json()['protocolo']}"
-            " | Setor de destino: Qualidade | Responsável: ana.qualidade"
+            " | Setor de destino: Qualidade | Responsável: bruno.qualidade"
         )
 
-    @pytest.mark.parametrize(
-        "chave", ["atendente_id", "tecnico_da_qualidade_id", "admin_da_qualidade_id"]
-    )
-    def test_responsavel_com_qualquer_perfil(self, cliente, qualidade, autenticar, chave):
+    def test_responsavel_so_tecnico(self, cliente, qualidade, autenticar):
+        """API-13: o Técnico da Qualidade é o único perfil aceito como responsável."""
         resposta = cliente.post(
             "/api/v1/chamados/",
-            json=corpo_qualidade(qualidade, tecnico_responsavel_id=qualidade[chave]),
+            json=corpo_qualidade(qualidade, tecnico_responsavel_id=qualidade["tecnico_da_qualidade_id"]),
             headers=_comum(autenticar, qualidade),
         )
 
         assert resposta.status_code == 201
-        assert resposta.json()["tecnico_responsavel_id"] == qualidade[chave]
+        assert resposta.json()["tecnico_responsavel_id"] == qualidade["tecnico_da_qualidade_id"]
 
 
 class TestSolicitanteSegueARegraAtual:
@@ -470,7 +470,17 @@ class TestRecusasNaoGravamNada:
         assert webhook == []
 
     @pytest.mark.parametrize(
-        "chave", ["inativo_id", "conta_de_servico_id", "sem_setor_id", "tecnico_id", "comum_id"]
+        "chave",
+        [
+            "inativo_id",
+            "conta_de_servico_id",
+            "sem_setor_id",
+            "tecnico_id",
+            "comum_id",
+            # API-13: lotados na Qualidade, mas sem perfil Técnico.
+            "atendente_id",
+            "admin_da_qualidade_id",
+        ],
     )
     def test_responsavel_inelegivel_e_400(self, cliente, qualidade, autenticar, nada_gravado, chave):
         resposta = self._post(
@@ -505,7 +515,11 @@ class TestNadaMaisMuda:
     def test_usuario_comum_continua_sem_put_no_chamado_da_qualidade(
         self, cliente, qualidade, autenticar
     ):
-        """Atender chamado da Qualidade é a etapa seguinte; aqui o PUT segue só da equipe."""
+        """
+        Atender chamado da Qualidade é a etapa seguinte; aqui o PUT segue só da
+        equipe. Quem tenta é o usuário comum lotado na Qualidade — desde a
+        API-13 ele não é mais escolhido como responsável, e continua sem PUT.
+        """
         criado = cliente.post(
             "/api/v1/chamados/", json=corpo_qualidade(qualidade), headers=_comum(autenticar, qualidade)
         ).json()

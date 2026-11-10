@@ -155,9 +155,13 @@ def qualidade(dados, sessao, monkeypatch):
     sessao.flush()
 
     contas = {
-        # Perfil comum: o caso típico de quem atende na Qualidade.
+        # Perfil comum, lotada na Qualidade. Até a API-12 era o caso típico de
+        # quem atende nela; desde a API-13 não é elegível, e fica como a
+        # responsável legada do `chamado_qualidade` (a matriz de leitura conta
+        # com ela).
         "atendente_id": Usuario(id=40, nome="ana.qualidade", role_id=3, setor_id=2, ativo=True),
-        # Qualquer perfil serve, desde que seja da Qualidade.
+        # O único perfil elegível desde a API-13: Técnico, lotado na Qualidade.
+        # Até a API-12 qualquer perfil do setor servia.
         "tecnico_da_qualidade_id": Usuario(id=41, nome="bruno.qualidade", role_id=2, setor_id=2, ativo=True),
         "inativo_id": Usuario(id=42, nome="carla.qualidade", role_id=3, setor_id=2, ativo=False),
         "conta_de_servico_id": Usuario(
@@ -179,14 +183,7 @@ def qualidade(dados, sessao, monkeypatch):
     }
 
 
-@pytest.fixture
-def chamado_qualidade(qualidade, sessao):
-    """
-    Um chamado da Qualidade, aberto e atribuído à atendente de perfil comum.
-
-    Fixture à parte, e não dentro de `qualidade`: os testes que contam
-    chamados com a Qualidade configurada continuam vendo o banco de antes.
-    """
+def _abrir_chamado_qualidade(qualidade, sessao, responsavel_id):
     chamado = Chamado(
         id=101,
         protocolo="CH-TESTE-101",
@@ -197,12 +194,38 @@ def chamado_qualidade(qualidade, sessao):
         status="Aberto",
         prioridade="Média",
         setor_destino="QUALIDADE",
-        tecnico_responsavel_id=qualidade["atendente_id"],
+        tecnico_responsavel_id=responsavel_id,
     )
     sessao.add(chamado)
     sessao.commit()
 
     return {**qualidade, "chamado_qualidade_id": chamado.id}
+
+
+@pytest.fixture
+def chamado_qualidade(qualidade, sessao):
+    """
+    Um chamado da Qualidade, aberto e atribuído à atendente de perfil comum.
+
+    Estado legado desde a API-13: a atendente não é mais elegível, e a API
+    não a atribuiria — o chamado é como os gravados antes dela. Fica assim
+    porque a matriz de leitura e os testes de reatribuição partem dele; quem
+    precisa de um responsável que atende pede `chamado_qualidade_do_tecnico`.
+
+    Fixture à parte, e não dentro de `qualidade`: os testes que contam
+    chamados com a Qualidade configurada continuam vendo o banco de antes.
+    """
+    return _abrir_chamado_qualidade(qualidade, sessao, qualidade["atendente_id"])
+
+
+@pytest.fixture
+def chamado_qualidade_do_tecnico(qualidade, sessao):
+    """
+    O mesmo chamado, já aberto com o Técnico da Qualidade como responsável —
+    o único perfil que atende desde a API-13. Gravado assim desde o INSERT, e
+    não trocado depois, para a versão começar em 1 também no PostgreSQL.
+    """
+    return _abrir_chamado_qualidade(qualidade, sessao, qualidade["tecnico_da_qualidade_id"])
 
 
 @pytest.fixture

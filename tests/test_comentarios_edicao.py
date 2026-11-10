@@ -150,10 +150,15 @@ def test_recusa_de_quem_nao_ve_e_igual_a_de_inexistente(cliente, como, comentari
     assert respostas == {(404, '{"detail":"Comentário não encontrado"}')}
 
 
-def test_ex_responsavel_perde_a_edicao_quando_e_reatribuido(cliente, sessao, como, autenticar):
+def test_ex_responsavel_perde_a_edicao_quando_e_reatribuido(cliente, sessao, como, cenario_de_leitura):
     """
     O caminho real: a atendente comenta, o chamado é reatribuído, e o
     comentário dela fica onde está, sem que ela possa mais mexer nele.
+
+    A atendente tem perfil comum e é a responsável do q_atribuido no cenário
+    por gravação direta (estado legado: desde a API-13 a API não a atribui).
+    O novo responsável é o Técnico da Qualidade; até a API-12 era a eva, de
+    perfil comum, que hoje a reatribuição recusa.
     """
     cid = CHAMADOS["q_atribuido"]
     atendente = como("atendente")
@@ -165,15 +170,15 @@ def test_ex_responsavel_perde_a_edicao_quando_e_reatribuido(cliente, sessao, com
     versao = cliente.get(f"{API}/chamados/{cid}", headers=como("admin")).json()["versao"]
     reatribuido = cliente.put(
         f"{API}/chamados/{cid}", headers=como("admin"),
-        json={"tecnico_responsavel_id": EX_RESPONSAVEL, "versao_esperada": versao},
+        json={"tecnico_responsavel_id": cenario_de_leitura["tecnico_qualidade"], "versao_esperada": versao},
     )
     assert reatribuido.status_code == 200
 
     assert cliente.put(f"{API}/comentarios/{comentario_id}", headers=atendente, json={"comentario": "Outro texto"}).json() == NAO_ENCONTRADO
     assert cliente.delete(f"{API}/comentarios/{comentario_id}", headers=atendente).status_code == 404
     assert _texto(sessao, comentario_id) == ("Laudo conferido ok", False)
-    # Quem atende agora lê o comentário; não o edita, porque não é dela.
-    nova = autenticar(EX_RESPONSAVEL, "eva", "Usuario")
+    # Quem atende agora lê o comentário; não o edita, porque não é dele.
+    nova = como("tecnico_qualidade")
     assert cliente.get(f"{API}/comentarios/{comentario_id}", headers=nova).status_code == 200
     assert cliente.put(f"{API}/comentarios/{comentario_id}", headers=nova, json={"comentario": "Outro texto"}).status_code == 403
 

@@ -11,6 +11,10 @@ testes dela agem como o técnico da Qualidade (ou o administrador), e o
 técnico da TI, que até a API-12 também editava esses chamados, nem os lê
 (404).
 
+Desde a API-13 só o Técnico da Qualidade é elegível. O chamado do conftest
+continua atribuído à atendente de perfil comum — estado legado, gravado antes
+da API-13 —, e é a partir dele que estes testes reatribuem ou reenviam.
+
 Só a MUDANÇA de responsável é validada. A edição completa do frontend reenvia
 o responsável atual em todo salvamento; validar esse reenvio deixaria
 ineditável o chamado cujo responsável saiu da Qualidade depois de atribuído.
@@ -84,16 +88,29 @@ class TestNovoResponsavel:
             d["tecnico_da_qualidade_id"]
         )
 
-    def test_qualquer_perfil_elegivel_serve(self, cliente, chamado_qualidade, sessao, autenticar, webhook):
+    @pytest.mark.parametrize(
+        "chave", ["admin_da_qualidade_id", "atendente_id"], ids=["admin-da-qualidade", "comum-da-qualidade"]
+    )
+    def test_da_qualidade_sem_perfil_tecnico_e_400(
+        self, cliente, chamado_qualidade, sessao, autenticar, webhook, chave
+    ):
+        # API-13: setor certo, perfil errado. Até ela qualquer perfil da
+        # Qualidade servia. O chamado passa antes ao Técnico, para a ana ser
+        # uma troca de responsável, e não o reenvio do atual (P-6).
         d = chamado_qualidade
+        sessao.get(Chamado, d["chamado_qualidade_id"]).tecnico_responsavel_id = d["tecnico_da_qualidade_id"]
+        sessao.commit()
+
         resposta = _put(
             cliente, d["chamado_qualidade_id"],
-            {"tecnico_responsavel_id": d["admin_da_qualidade_id"]},
+            {"tecnico_responsavel_id": d[chave]},
             _tecnico_da_qualidade(autenticar, d),
         )
 
-        assert resposta.status_code == 200
-        assert _chamado(sessao, d["chamado_qualidade_id"]).tecnico_responsavel_id == d["admin_da_qualidade_id"]
+        assert resposta.status_code == 400
+        assert resposta.json()["detail"] == "Atendente não é elegível para a Qualidade"
+        assert _chamado(sessao, d["chamado_qualidade_id"]).tecnico_responsavel_id == d["tecnico_da_qualidade_id"]
+        assert webhook == []
 
     def test_nao_dispara_o_webhook_da_ti(self, cliente, chamado_qualidade, autenticar, webhook):
         d = chamado_qualidade
@@ -126,8 +143,8 @@ class TestNovoResponsavel:
 class TestResponsavelRecusado:
     @pytest.mark.parametrize(
         "chave",
-        ["tecnico_id", "inativo_id", "conta_de_servico_id", "sem_setor_id", "admin_id"],
-        ids=["tecnico-da-ti", "inativo", "conta-de-servico", "sem-setor", "admin-da-ti"],
+        ["tecnico_id", "inativo_id", "conta_de_servico_id", "sem_setor_id", "admin_id", "admin_da_qualidade_id"],
+        ids=["tecnico-da-ti", "inativo", "conta-de-servico", "sem-setor", "admin-da-ti", "admin-da-qualidade"],
     )
     def test_inelegivel_e_400(self, cliente, chamado_qualidade, sessao, autenticar, webhook, chave):
         d = chamado_qualidade
