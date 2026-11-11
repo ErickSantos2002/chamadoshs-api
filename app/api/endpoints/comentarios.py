@@ -4,14 +4,54 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from typing import List
 
-from app.api.deps import get_current_user, get_db, is_admin, is_staff
+from app.api.deps import get_current_user, get_db, is_admin_humano
+from app.models.chamado import Chamado
 from app.models.comentario import ComentarioChamado
 from app.models.usuario import Usuario
 from app.schemas.comentario import ComentarioCreate, ComentarioUpdate, ComentarioResponse
+from app.services.leitura_service import (
+    buscar_chamado_legivel,
+    pode_acessar_comentario_interno,
+    pode_ler_chamado,
+)
 
 router = APIRouter()
 
 logger = logging.getLogger(__name__)
+
+COMENTARIO_NAO_ENCONTRADO = "Comentário não encontrado"
+CRIAR_INTERNO_NEGADO = "Apenas administrador ou a equipe do setor do chamado pode criar comentário interno"
+MARCAR_INTERNO_NEGADO = "Apenas administrador ou a equipe do setor do chamado pode marcar comentário como interno"
+
+
+def _buscar_comentario_visivel(db: Session, comentario_id: int, usuario: Usuario) -> ComentarioChamado:
+    """
+    O comentário, se `usuario` pode vê-lo HOJE; senão o 404 de um id que não
+    existe.
+
+    Ver é ler o chamado dele (API-5) e, se for interno, poder o interno
+    daquele chamado — administrador humano ou a equipe do setor de destino
+    (API-13, `pode_acessar_comentario_interno`).
+    As duas, nessa ordem. Vale para buscar, editar e excluir (API-6, D11):
+    quem perdeu a leitura do chamado — o ex-responsável, o autor de um
+    comentário de antes da API-5, o técnico da Qualidade num chamado da TI —
+    não mexe mais no que escreveu lá, e quem não pode o interno não o vê, não
+    o edita nem o exclui, nem sendo o autor. A recusa não diz que o
+    comentário existe.
+    """
+    comentario = db.query(ComentarioChamado).filter(ComentarioChamado.id == comentario_id).first()
+    chamado = db.query(Chamado).filter(Chamado.id == comentario.chamado_id).first() if comentario else None
+    if chamado is None or not pode_ler_chamado(usuario, chamado):
+        raise HTTPException(status_code=404, detail=COMENTARIO_NAO_ENCONTRADO)
+
+    # `is not False`: NULL conta como interno, como no filtro da listagem
+    # (`is_(False)`) — na dúvida, fecha.
+    if comentario.is_interno is not False and not pode_acessar_comentario_interno(usuario, chamado):
+        # 404 em vez de 403: um 403 confirmaria que existe um comentário
+        # interno naquele id.
+        raise HTTPException(status_code=404, detail=COMENTARIO_NAO_ENCONTRADO)
+
+    return comentario
 
 
 @router.get("/chamado/{chamado_id}", response_model=List[ComentarioResponse])
@@ -23,16 +63,19 @@ def listar_comentarios_chamado(
     db: Session = Depends(get_db),
 ):
     """
-    Lista os comentários de um chamado.
+    Lista os comentários de um chamado, se o usuário puder ler o chamado.
 
-    Comentários internos só aparecem para administrador e técnico — é para
-    isso que serve a marcação is_interno.
+    Chamado que não existe e chamado que a pessoa não lê dão o mesmo 404
+    (API-5). Comentários internos só aparecem para administrador humano e
+    para a equipe do setor de destino (API-13): para o resto, a lista é a
+    dos públicos, sem erro e sem sinal de que há internos.
     """
+    chamado = buscar_chamado_legivel(db, chamado_id, current_user)
     query = db.query(ComentarioChamado).filter(
         ComentarioChamado.chamado_id == chamado_id
     )
 
-    if not is_staff(current_user):
+    if not pode_acessar_comentario_interno(current_user, chamado):
         query = query.filter(ComentarioChamado.is_interno.is_(False))
 
     return query.offset(skip).limit(limit).all()
@@ -47,18 +90,12 @@ def buscar_comentario(
     """
     Busca um comentário específico por ID.
 
-    Comentário interno só é devolvido para administrador e técnico.
+    O comentário segue a leitura do chamado dele: pedir pelo id do comentário
+    não contorna a regra (API-5). Comentário interno só é devolvido para
+    administrador humano e para a equipe do setor de destino (API-13); para
+    o resto, o 404 de um id que não existe.
     """
-    comentario = db.query(ComentarioChamado).filter(ComentarioChamado.id == comentario_id).first()
-    if not comentario:
-        raise HTTPException(status_code=404, detail="Comentário não encontrado")
-
-    if comentario.is_interno and not is_staff(current_user):
-        # 404 em vez de 403: um 403 confirmaria que existe um comentário
-        # interno naquele id.
-        raise HTTPException(status_code=404, detail="Comentário não encontrado")
-
-    return comentario
+    return _buscar_comentario_visivel(db, comentario_id, current_user)
 
 
 @router.post("/", response_model=ComentarioResponse, status_code=status.HTTP_201_CREATED)
@@ -70,8 +107,12 @@ def criar_comentario(
     """
     Adiciona um novo comentário a um chamado.
 
-    O autor vem do token. Só administrador e técnico podem marcar o
-    comentário como interno.
+    O autor vem do token. O chamado tem de existir e o usuário tem de poder
+    lê-lo (API-5): antes qualquer conta comentava em qualquer chamado. Quem
+    não pode recebe o mesmo 404 de um chamado que não existe. Só
+    administrador humano e a equipe do setor de destino criam comentário
+    interno (API-13); o resto recebe 403 e nada é gravado. O comentário público segue de quem lê o
+    chamado.
     """
     # Só `is not None`: o aviso conta quem ainda manda o campo, não quem manda
     # o id de outra pessoa. Ver a nota em chamados.py.
@@ -82,11 +123,13 @@ def criar_comentario(
             current_user.id,
         )
 
-    if comentario_data.is_interno and not is_staff(current_user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Apenas administrador ou técnico pode criar comentário interno",
-        )
+    # A leitura antes da regra do interno: um 403 aqui diria que o chamado
+    # existe a quem nem pode vê-lo.
+    chamado = buscar_chamado_legivel(db, comentario_data.chamado_id, current_user)
+
+    # 403 e não 404: quem chega aqui lê o chamado, e não há o que esconder.
+    if comentario_data.is_interno and not pode_acessar_comentario_interno(current_user, chamado):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CRIAR_INTERNO_NEGADO)
 
     # exclude do usuario_id é obrigatório: sem ele o valor enviado pelo
     # cliente ainda chegaria ao banco, mesmo o campo sendo ignorado acima.
@@ -108,25 +151,32 @@ def atualizar_comentario(
     db: Session = Depends(get_db),
 ):
     """
-    Atualiza um comentário existente. Só o autor ou um administrador.
+    Atualiza um comentário existente. Só o autor ou um administrador, e só
+    quem vê o comentário hoje (API-6, D11): quem não vê recebe o 404 de um id
+    que não existe, antes do 403 de autoria. Isso inclui o interno para quem
+    não pode o interno daquele chamado (API-8, API-13), autor ou não: não o
+    edita nem o torna público. Tornar interno um comentário público é só de administrador
+    humano e da equipe do setor de destino.
     """
-    comentario = db.query(ComentarioChamado).filter(ComentarioChamado.id == comentario_id).first()
-    if not comentario:
-        raise HTTPException(status_code=404, detail="Comentário não encontrado")
+    comentario = _buscar_comentario_visivel(db, comentario_id, current_user)
 
-    if comentario.usuario_id != current_user.id and not is_admin(current_user):
+    # Comentário alheio, só o administrador humano (API-11, S3).
+    if comentario.usuario_id != current_user.id and not is_admin_humano(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Só é possível editar comentários de sua autoria",
         )
 
-    if comentario_data.is_interno and not is_staff(current_user):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Apenas administrador ou técnico pode marcar comentário como interno",
-        )
+    # O chamado existe e é legível: `_buscar_comentario_visivel` acabou de conferir.
+    chamado = db.query(Chamado).filter(Chamado.id == comentario.chamado_id).first()
+    if comentario_data.is_interno and not pode_acessar_comentario_interno(current_user, chamado):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=MARCAR_INTERNO_NEGADO)
 
     update_data = comentario_data.model_dump(exclude_unset=True)
+    # `is_interno: null` não é uma visibilidade: vale como não enviado. Sem
+    # isto o NULL ia para o banco (a coluna aceita) e a resposta quebrava.
+    if update_data.get("is_interno", False) is None:
+        del update_data["is_interno"]
     for field, value in update_data.items():
         setattr(comentario, field, value)
 
@@ -142,13 +192,14 @@ def deletar_comentario(
     db: Session = Depends(get_db),
 ):
     """
-    Deleta um comentário. Só o autor ou um administrador.
+    Deleta um comentário. Só o autor ou um administrador, e só quem vê o
+    comentário hoje — como na edição: o interno, só quem pode o interno
+    daquele chamado (API-8, API-13).
     """
-    comentario = db.query(ComentarioChamado).filter(ComentarioChamado.id == comentario_id).first()
-    if not comentario:
-        raise HTTPException(status_code=404, detail="Comentário não encontrado")
+    comentario = _buscar_comentario_visivel(db, comentario_id, current_user)
 
-    if comentario.usuario_id != current_user.id and not is_admin(current_user):
+    # Comentário alheio, só o administrador humano (API-11, S3).
+    if comentario.usuario_id != current_user.id and not is_admin_humano(current_user):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Só é possível excluir comentários de sua autoria",

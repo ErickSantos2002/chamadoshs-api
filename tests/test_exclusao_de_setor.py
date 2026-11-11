@@ -91,10 +91,12 @@ class TestApagaDeVerdade:
 
         assert resposta.status_code == 404
 
-    def test_tecnico_pode_excluir(self, cliente, dados, sessao, autenticar):
+    def test_tecnico_da_ti_nao_exclui(self, cliente, dados, sessao, autenticar):
         """
-        Setor passou a ser cadastro de técnico em 13/08/2026. A trilha registra
-        quem apagou, então a rastreabilidade não depende do perfil.
+        Setor passou a ser cadastro de técnico em 13/08/2026, e a exclusão
+        voltou a ser só do administrador na API-7 (A7-1): o técnico da TI
+        cria, edita, desativa e reativa, mas não apaga. Até a API-6 este
+        teste esperava 204.
         """
         setor_id = _setor(sessao)
 
@@ -103,8 +105,8 @@ class TestApagaDeVerdade:
             headers=autenticar(dados["tecnico_id"], "tecnico.teste", "Tecnico"),
         )
 
-        assert resposta.status_code == 204
-        assert not _existe(sessao, setor_id)
+        assert resposta.status_code == 403
+        assert _existe(sessao, setor_id)
 
     def test_usuario_comum_nao_pode(self, cliente, dados, sessao, autenticar):
         setor_id = _setor(sessao)

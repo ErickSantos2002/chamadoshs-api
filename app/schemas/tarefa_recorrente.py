@@ -74,3 +74,21 @@ class RealizarTarefaRequest(BaseModel):
     # para o frontend atual não quebrar entre os dois deploys. Remover depois.
     usuario_id: Optional[int] = None
     observacao: Optional[str] = None
+
+
+SituacaoDoLembrete = Literal["atrasada", "hoje", "realizada_hoje"]
+
+
+class LembreteDoDia(BaseModel):
+    """Uma tarefa no lembrete do dia: só o que o painel mostra (API-11, S1)."""
+    id: int
+    titulo: str
+    proxima_data: date
+    situacao: SituacaoDoLembrete
+
+
+class LembretesDoDiaResponse(BaseModel):
+    # O dia de Brasília em que a lista foi montada: a tela compara com ele, e
+    # não com o relógio do navegador.
+    data: date
+    tarefas: list[LembreteDoDia]

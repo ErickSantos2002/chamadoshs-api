@@ -41,6 +41,23 @@ Isso vale para migrações **aditivas**, que é o que este projeto tem tido —
 essa propriedade, e aí o rollback da imagem deixa de ser seguro: ao escrever
 uma dessas, diga isso no cabeçalho do arquivo.
 
+## Mudança de permissão: conferir quem perde acesso
+
+Mudança de permissão não tem migration para lembrar dela, e o efeito só
+aparece quando alguém tenta trabalhar. Antes de subir uma versão que restringe
+perfil ou conta de serviço (API-7 em diante), conferir no banco, **só leitura**,
+quem é afetado — a seção **Ação necessária no deploy** do `CHANGELOG.md` diz a
+consulta de cada uma.
+
+**API-11:** conta de serviço deixa de administrar. Antes de subir, contar os
+administradores humanos ativos; **com zero, não subir** — a administração
+ficaria sem ninguém. Inventário, recuperação e plano de migração das contas
+compartilhadas: [docs/contas-de-servico.md](docs/contas-de-servico.md).
+`PAINEL_CONTAS_IDS` pode subir vazia (ninguém lê como painel); preenchê-la só
+com o id da TV conferido pelo procedimento do documento, e conferir depois em
+`GET /api/v1/diagnostico/`, seção `painel`. Ela sozinha não traz o lembrete de
+volta à TV: falta o FE que use a rota.
+
 ## Banco novo x banco existente
 
 São dois caminhos, e **misturar os dois falha**:
@@ -276,6 +293,7 @@ Internet
 | API_VERSION | Versão da API | `v1` | ❌ Não (padrão: v1) |
 | API_TITLE | Título da API | `ChamadosHS API` | ❌ Não |
 | API_DESCRIPTION | Descrição da API | `API de chamados...` | ❌ Não |
+| PAINEL_CONTAS_IDS | Contas de serviço do painel de parede que leem os lembretes do dia (API-11) | vazio — o id sai do inventário | ❌ Não (padrão: nenhuma) |
 
 ## Comandos Úteis
 

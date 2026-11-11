@@ -108,6 +108,9 @@ CREATE TABLE IF NOT EXISTS chamados (
     observacoes TEXT,
     avaliacao INTEGER CHECK (avaliacao >= 1 AND avaliacao <= 5),
 
+    -- Setor que atende o chamado. NÃO é o setor do solicitante (usuarios.setor_id).
+    setor_destino VARCHAR(20) NOT NULL DEFAULT 'TI',
+
     -- Flags de controle (soft delete e arquivamento)
     cancelado BOOLEAN NOT NULL DEFAULT FALSE,
     arquivado BOOLEAN NOT NULL DEFAULT FALSE,
@@ -115,10 +118,16 @@ CREATE TABLE IF NOT EXISTS chamados (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
+    -- Versão do chamado (controle otimista). Mantida por trigger_chamados_versao,
+    -- abaixo: 1 no INSERT, +1 a cada UPDATE que muda algum dado persistido.
+    versao INTEGER NOT NULL DEFAULT 1,
+
     -- Constraints
     CONSTRAINT chk_prioridade CHECK (prioridade IN ('Baixa', 'Média', 'Alta', 'Crítica')),
     CONSTRAINT chk_urgencia CHECK (urgencia IS NULL OR urgencia IN ('Não Urgente', 'Normal', 'Urgente', 'Muito Urgente')),
-    CONSTRAINT chk_status CHECK (status IN ('Aberto', 'Em Andamento', 'Aguardando', 'Resolvido', 'Fechado'))
+    CONSTRAINT chk_status CHECK (status IN ('Aberto', 'Em Andamento', 'Aguardando', 'Resolvido', 'Fechado')),
+    CONSTRAINT chk_setor_destino CHECK (setor_destino IN ('TI', 'QUALIDADE')),
+    CONSTRAINT chk_chamados_versao CHECK (versao >= 1)
 );
 
 -- Tabela de Comentários nos Chamados
@@ -323,6 +332,44 @@ CREATE TRIGGER trigger_comentarios_updated_at
     EXECUTE FUNCTION atualizar_updated_at();
 
 -- ============================================
+-- VERSÃO DO CHAMADO (controle otimista)
+-- ============================================
+--
+-- O corpo é o MESMO de migrations/2026-10-28-add-versao-chamados.sql, que é
+-- onde a semântica está explicada. Rodar aquela migration num banco criado
+-- por este arquivo responde "já aplicada" — e o teste
+-- test_versao_api_postgres.py falha se os dois textos se separarem.
+
+CREATE OR REPLACE FUNCTION chamados_versao()
+RETURNS TRIGGER LANGUAGE plpgsql AS $corpo$
+BEGIN
+    -- INSERT: todo chamado nasce na versão 1, diga o comando o que disser.
+    IF TG_OP = 'INSERT' THEN
+        NEW.versao := 1;
+        RETURN NEW;
+    END IF;
+
+    -- UPDATE: sobe 1 se alguma coluna persistida mudou, fora os carimbos
+    -- automáticos (updated_at, data_atualizacao) e a própria versão. Senão
+    -- fica a de antes — inclusive quando o comando tentou gravar outra.
+    IF (to_jsonb(NEW) - 'versao' - 'updated_at' - 'data_atualizacao')
+       IS DISTINCT FROM
+       (to_jsonb(OLD) - 'versao' - 'updated_at' - 'data_atualizacao') THEN
+        NEW.versao := OLD.versao + 1;
+    ELSE
+        NEW.versao := OLD.versao;
+    END IF;
+    RETURN NEW;
+END;
+$corpo$;
+
+DROP TRIGGER IF EXISTS trigger_chamados_versao ON chamados;
+CREATE TRIGGER trigger_chamados_versao
+    BEFORE INSERT OR UPDATE ON chamados
+    FOR EACH ROW
+    EXECUTE FUNCTION chamados_versao();
+
+-- ============================================
 -- DADOS INICIAIS (SEED)
 -- ============================================
 
@@ -400,6 +447,7 @@ COMMENT ON COLUMN chamados.avaliacao IS 'Nota de satisfação do solicitante (1 
 COMMENT ON COLUMN chamados.urgencia IS 'Nível de urgência definido por técnicos (Não Urgente, Normal, Urgente, Muito Urgente)';
 COMMENT ON COLUMN chamados.cancelado IS 'Soft delete: some da visualização padrão, permanece no banco';
 COMMENT ON COLUMN chamados.arquivado IS 'Sai da visualização padrão sem ser cancelado';
+COMMENT ON COLUMN chamados.setor_destino IS 'Setor que atende o chamado (TI | QUALIDADE). NÃO é o setor do solicitante (usuarios.setor_id)';
 COMMENT ON COLUMN comentarios_chamados.is_interno IS 'Se TRUE, visível apenas para técnicos';
 COMMENT ON COLUMN usuarios.senha_hash IS 'Hash bcrypt da senha do usuário';
 COMMENT ON COLUMN usuarios.conta_de_servico IS 'Conta que não representa uma pessoa (painel, integração, login compartilhado)';

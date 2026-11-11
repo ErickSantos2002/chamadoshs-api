@@ -2,11 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 import logging
 
-from app.api.deps import get_db, require_staff
+from app.api.deps import get_db, require_equipe_ti, require_leitura_dos_lembretes
 from app.models.tarefa_recorrente import TarefaRecorrente, TarefaRecorrenteExecucao
 from app.models.usuario import Usuario
 from app.schemas.tarefa_recorrente import (
@@ -14,6 +14,7 @@ from app.schemas.tarefa_recorrente import (
     TarefaRecorrenteUpdate,
     TarefaRecorrenteResponse,
     ExecucaoResponse,
+    LembretesDoDiaResponse,
     RealizarTarefaRequest,
 )
 from app.services.recorrencia_service import calcular_proxima_data
@@ -63,12 +64,14 @@ def listar_tarefas(
     apenas_atrasadas: bool = False,
     skip: int = Query(0, ge=0),
     limit: int = Query(200, ge=1),
-    _staff: Usuario = Depends(require_staff),
+    _equipe_ti: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     """
     Lista tarefas recorrentes (ordenadas pela próxima data). Restrito a
-    administrador ou técnico.
+    administrador ou técnico da TI (API-7, A7-4) — as sete rotas do módulo.
+    Até a API-6 bastava ser técnico, de qualquer setor: a rotina não tem
+    setor, e o perfil sozinho não dizia que a pessoa era da TI.
 
     O módulo inteiro é da equipe de TI, e a leitura acompanha a escrita: rotina
     interna não é informação de solicitante. Estava aberta a qualquer
@@ -85,10 +88,59 @@ def listar_tarefas(
     return [_montar_response(t, db) for t in tarefas]
 
 
+@router.get("/lembretes-do-dia", response_model=LembretesDoDiaResponse)
+def lembretes_do_dia(
+    _leitor: Usuario = Depends(require_leitura_dos_lembretes),
+    db: Session = Depends(get_db),
+):
+    """
+    O lembrete "tarefas do dia" do quadro, em leitura mínima (API-11, S1).
+
+    As tarefas ativas que vencem hoje ou já venceram, e as realizadas hoje —
+    a mesma regra que o quadro aplica hoje sobre `GET /tarefas-recorrentes/`,
+    mas com o dia de Brasília calculado aqui e só id, título, próxima data e
+    situação. Nada de descrição, instruções, responsável ou execuções. Ordem
+    estável: próxima data, depois id. Só lê.
+
+    Quem lê é quem lê o módulo — administrador humano e técnico da TI
+    (`require_equipe_ti`) — e a conta do painel de parede: de serviço, ativa e
+    com o id em `PAINEL_CONTAS_IDS` (`require_leitura_dos_lembretes`). Nome,
+    perfil, `conta_de_servico` sozinho, IP, User-Agent e parâmetro do cliente
+    não identificam a TV. Esta rota não abre nenhuma das sete rotas do módulo,
+    nem para o painel (ver docs/contas-de-servico.md).
+    """
+    hoje = _hoje()
+    inicio, fim = datetime.combine(hoje, time.min), datetime.combine(hoje + timedelta(days=1), time.min)
+    realizadas_hoje = {
+        tarefa_id
+        for (tarefa_id,) in db.query(TarefaRecorrenteExecucao.tarefa_id)
+        .filter(TarefaRecorrenteExecucao.realizada_em >= inicio, TarefaRecorrenteExecucao.realizada_em < fim)
+        .distinct()
+    }
+    tarefas = (
+        db.query(TarefaRecorrente.id, TarefaRecorrente.titulo, TarefaRecorrente.proxima_data)
+        .filter(TarefaRecorrente.ativo.is_(True))
+        .order_by(TarefaRecorrente.proxima_data.asc(), TarefaRecorrente.id.asc())
+        .all()
+    )
+    lembretes = []
+    for tarefa_id, titulo, proxima in tarefas:
+        if proxima < hoje:
+            situacao = "atrasada"
+        elif proxima == hoje:
+            situacao = "hoje"
+        elif tarefa_id in realizadas_hoje:
+            situacao = "realizada_hoje"
+        else:
+            continue
+        lembretes.append({"id": tarefa_id, "titulo": titulo, "proxima_data": proxima, "situacao": situacao})
+    return {"data": hoje, "tarefas": lembretes}
+
+
 @router.get("/{tarefa_id}", response_model=TarefaRecorrenteResponse)
 def buscar_tarefa(
     tarefa_id: int,
-    _staff: Usuario = Depends(require_staff),
+    _equipe_ti: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     tarefa = db.query(TarefaRecorrente).filter(TarefaRecorrente.id == tarefa_id).first()
@@ -100,7 +152,7 @@ def buscar_tarefa(
 @router.post("/", response_model=TarefaRecorrenteResponse, status_code=status.HTTP_201_CREATED)
 def criar_tarefa(
     dados: TarefaRecorrenteCreate,
-    _staff: Usuario = Depends(require_staff),
+    _equipe_ti: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     payload = dados.model_dump()
@@ -125,7 +177,7 @@ def criar_tarefa(
 def atualizar_tarefa(
     tarefa_id: int,
     dados: TarefaRecorrenteUpdate,
-    _staff: Usuario = Depends(require_staff),
+    _equipe_ti: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     tarefa = db.query(TarefaRecorrente).filter(TarefaRecorrente.id == tarefa_id).first()
@@ -141,7 +193,7 @@ def atualizar_tarefa(
 @router.delete("/{tarefa_id}", status_code=status.HTTP_204_NO_CONTENT)
 def deletar_tarefa(
     tarefa_id: int,
-    _staff: Usuario = Depends(require_staff),
+    _equipe_ti: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     """Exclui a tarefa e, em cascata, todo o histórico de execuções.
@@ -160,11 +212,12 @@ def deletar_tarefa(
 @router.get("/{tarefa_id}/execucoes", response_model=List[ExecucaoResponse])
 def listar_execucoes(
     tarefa_id: int,
-    _staff: Usuario = Depends(require_staff),
+    _equipe_ti: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     """
-    Histórico de execuções de uma rotina. Restrito a administrador ou técnico.
+    Histórico de execuções de uma rotina. Restrito a administrador ou técnico
+    da TI.
 
     Diz quem fez o quê e quando dentro da equipe — é o registro de trabalho dos
     técnicos, e não tem leitor legítimo fora dela.
@@ -188,17 +241,17 @@ def listar_execucoes(
 def realizar_tarefa(
     tarefa_id: int,
     dados: RealizarTarefaRequest,
-    current_user: Usuario = Depends(require_staff),
+    current_user: Usuario = Depends(require_equipe_ti),
     db: Session = Depends(get_db),
 ):
     """
     Registra uma execução e avança a próxima data para a próxima ocorrência.
-    Restrito a administrador ou técnico.
+    Restrito a administrador ou técnico da TI.
 
     Quem realizou vem do token: aceitar do corpo permitia registrar a
     execução em nome de outra pessoa.
 
-    **Por que `require_staff` e não `get_current_user`**, que era o que estava
+    **Por que uma trava de equipe e não `get_current_user`**, que era o que estava
     aqui: rotina recorrente é trabalho da equipe de TI, e esta rota não apenas
     registra quem fez — ela **avança `proxima_data`**. Com qualquer autenticado
     podendo chamá-la, um usuário comum marcava "Backup semanal" como realizado
@@ -206,7 +259,9 @@ def realizar_tarefa(
     acontecido e sem nada parecer errado na tela.
 
     O restante do CRUD de rotina já exigia staff; era esta a porta que ficou
-    aberta, e ela é a única do módulo que muda o estado do agendamento.
+    aberta, e ela é a única do módulo que muda o estado do agendamento. Na
+    API-7 a trava virou `require_equipe_ti`: o técnico da Qualidade marcava a
+    rotina da TI como feita do mesmo jeito.
     """
     # Só `is not None`: o aviso conta quem ainda manda o campo, não quem manda
     # o id de outra pessoa. Ver a nota em chamados.py.

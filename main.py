@@ -1,9 +1,11 @@
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.api.deps import get_current_user, require_admin
 from app.api.endpoints import auth, chamados, usuarios, comentarios, setores, categorias, historico, diagnostico, eventos, health, sla_configs, tarefas_recorrentes
+from app.services.versao_service import VersaoDesatualizada
 
 # Docs só em desenvolvimento. openapi_url precisa cair junto: sem isso,
 # /openapi.json continuaria servindo o mapa completo da API e o bloqueio
@@ -28,6 +30,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Só o 409 de versão desatualizada: `codigo` e `versao_atual` ao lado do
+# `detail`, no nível de cima, para o cliente distingui-lo dos outros 409
+# (transição, arquivado, cancelado) e saber para qual versão recarregar. O
+# handler é escolhido pela classe da exceção, então os demais HTTPException
+# continuam no handler padrão do FastAPI.
+@app.exception_handler(VersaoDesatualizada)
+async def _versao_desatualizada(request: Request, exc: VersaoDesatualizada):
+    return JSONResponse(status_code=exc.status_code, content=exc.corpo())
 
 
 # Health check endpoint
@@ -133,10 +145,10 @@ app.include_router(
 # ordem de declaração para não ser engolida pelo path int.
 #
 # A restrição de perfil NÃO fica aqui, e isso é exceção deliberada ao padrão
-# desta tela: administrador vê a trilha inteira e técnico vê apenas eventos de
-# setor, que é o cadastro que ele administra. Uma dependency de router só sabe
-# dizer "entra ou não entra" — a distinção depende do parâmetro `alvo` da
-# requisição, então mora no handler, junto com a explicação.
+# desta tela: administrador vê a trilha inteira e técnico da TI vê apenas
+# eventos de setor, que é o cadastro que ele administra. Uma dependency de
+# router só sabe dizer "entra ou não entra" — a distinção depende do parâmetro
+# `alvo` da requisição, então mora no handler, junto com a explicação.
 app.include_router(
     eventos.router,
     prefix="/api/v1/eventos",

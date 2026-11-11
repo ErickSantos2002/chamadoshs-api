@@ -1,5 +1,93 @@
+import logging
+import re
+
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import FrozenSet, List, NamedTuple, Optional
+
+logger = logging.getLogger(__name__)
+
+
+class SetoresTI(NamedTuple):
+    """
+    `SETORES_TI_IDS` interpretada. `estado` é um de:
+
+    - "ausente": variável não definida;
+    - "vazia": definida sem nenhum id;
+    - "valida": todos os itens são ids;
+    - "invalida": algum item não é id — a lista inteira é descartada.
+
+    Fora de "valida", `ids` é vazio: nenhum setor vale como TI.
+    """
+
+    estado: str
+    ids: FrozenSet[int]
+    duplicados: bool = False
+
+
+# [0-9], e não \d: \d aceita dígitos de outros alfabetos, que int() converte.
+_ID_DE_SETOR = re.compile(r"[0-9]+")
+
+
+def interpretar_setores_ti(valor: Optional[str]) -> SetoresTI:
+    """
+    Lê `SETORES_TI_IDS`: ids inteiros positivos separados por vírgula.
+
+    Um item inválido descarta a lista inteira, em vez de aproveitar os
+    válidos: "1,2O" com a letra no lugar do zero deixaria o setor 20 de fora
+    sem ninguém perceber, e quem confere a configuração precisa ver que ela
+    está quebrada, não meio aplicada. Repetidos são juntados.
+    """
+    if valor is None:
+        return SetoresTI("ausente", frozenset())
+    texto = str(valor).strip()
+    if not texto:
+        return SetoresTI("vazia", frozenset())
+    itens = [item.strip() for item in texto.split(",")]
+    if not all(_ID_DE_SETOR.fullmatch(item) and int(item) > 0 for item in itens):
+        return SetoresTI("invalida", frozenset())
+    numeros = [int(item) for item in itens]
+    return SetoresTI("valida", frozenset(numeros), duplicados=len(set(numeros)) != len(numeros))
+
+
+class ContasDoPainel(NamedTuple):
+    """
+    `PAINEL_CONTAS_IDS` interpretada, com os mesmos estados de `SetoresTI`.
+    Fora de "valida", `ids` é vazio: nenhuma conta lê como painel.
+    """
+
+    estado: str
+    ids: FrozenSet[int]
+    duplicados: bool = False
+
+
+# Sem zero à esquerda e com até dez dígitos: o teto vem depois, em número.
+_ID_DE_USUARIO = re.compile(r"[1-9][0-9]{0,9}")
+# `usuarios.id` é INTEGER no PostgreSQL.
+_MAIOR_ID_DE_USUARIO = 2_147_483_647
+
+
+def interpretar_painel_contas(valor: Optional[str]) -> ContasDoPainel:
+    """
+    Lê `PAINEL_CONTAS_IDS`: ids de usuário, inteiros positivos, separados por
+    vírgula.
+
+    A mesma regra de `SETORES_TI_IDS` — um item inválido descarta a lista
+    inteira, repetidos são juntados —, e mais estrita no item: zero à
+    esquerda, mais de dez dígitos e id acima do teto do INTEGER também
+    invalidam. O tamanho é conferido antes do `int()`, que recusa texto de
+    milhares de dígitos com exceção e derrubaria a API na subida.
+    """
+    if valor is None:
+        return ContasDoPainel("ausente", frozenset())
+    texto = str(valor).strip()
+    if not texto:
+        return ContasDoPainel("vazia", frozenset())
+    itens = [item.strip() for item in texto.split(",")]
+    if not all(_ID_DE_USUARIO.fullmatch(item) and int(item) <= _MAIOR_ID_DE_USUARIO for item in itens):
+        return ContasDoPainel("invalida", frozenset())
+    numeros = [int(item) for item in itens]
+    return ContasDoPainel("valida", frozenset(numeros), duplicados=len(set(numeros)) != len(numeros))
 
 
 class Settings(BaseSettings):
@@ -61,6 +149,141 @@ class Settings(BaseSettings):
     # configurada e o container reiniciado.
     WEBHOOK_TECNICO_TOKEN: str = ""
     WEBHOOK_TECNICO_HEADER: str = "X-Webhook-Token"
+
+    # Setor que atende os chamados de destino QUALIDADE (id em `setores`).
+    #
+    # Por ambiente, e nunca fixo no código: o id da Qualidade em produção não é
+    # o mesmo da homologação, e nome não serve — setor é renomeável.
+    #
+    # Sem valor, a abertura para a Qualidade fica fechada (503) e a TI segue
+    # normal. Valor vazio ou inválido vale como sem valor, em vez de impedir a
+    # API de subir: um erro de digitação aqui não pode tirar do ar a abertura
+    # de chamados da TI. O aviso vai para o log.
+    SETOR_QUALIDADE_ID: Optional[int] = None
+
+    @field_validator("SETOR_QUALIDADE_ID", mode="before")
+    @classmethod
+    def _setor_qualidade_id(cls, valor):
+        if valor is None:
+            return None
+        texto = str(valor).strip()
+        if not texto:
+            return None
+        try:
+            numero = int(texto)
+        except ValueError:
+            numero = 0
+        if numero <= 0:
+            logger.warning(
+                "SETOR_QUALIDADE_ID=%r não é um id válido; abertura para a Qualidade desligada",
+                valor,
+            )
+            return None
+        return numero
+
+    # Setores da equipe de TI (ids em `setores`), separados por vírgula: "1"
+    # ou "1,7". É o que faz um técnico ser da TI (API-6, D10): ler os chamados
+    # da TI e da Qualidade, alterá-los e ser responsável por chamado da TI. E
+    # administrar setores, categorias, SLA, tarefas recorrentes e a trilha de
+    # setor (API-7, D13), que sem ela ficam só com o administrador.
+    #
+    # Sem valor padrão, e sem exemplo: os ids mudam por ambiente e só quem
+    # confere o cadastro real pode dizê-los (ver os SELECTs do CHANGELOG).
+    # Nome de setor não serve, pelo mesmo motivo de SETOR_QUALIDADE_ID.
+    #
+    # Ausente, vazia ou inválida, nenhum setor é da TI: técnico nenhum tem
+    # alcance de TI, e cada um fica só com o vínculo direto (o que abriu e o
+    # que atende). A API sobe assim mesmo — login, abertura de chamado e a
+    # Qualidade não dependem disto — e o aviso vai para o log. O id da
+    # Qualidade nunca vale como TI, mesmo que esteja na lista.
+    #
+    # Texto cru, e não lista: o pydantic-settings desta versão lê lista do
+    # ambiente como JSON, e "1,7" derrubaria a API na subida.
+    SETORES_TI_IDS: Optional[str] = None
+
+    @property
+    def setores_ti(self) -> SetoresTI:
+        return interpretar_setores_ti(self.SETORES_TI_IDS)
+
+    @property
+    def setores_ti_ids(self) -> FrozenSet[int]:
+        """Os setores que valem como TI agora, já sem o da Qualidade."""
+        ids = self.setores_ti.ids
+        if self.SETOR_QUALIDADE_ID is not None:
+            ids = ids - {self.SETOR_QUALIDADE_ID}
+        return ids
+
+    @model_validator(mode="after")
+    def _avisar_setores_ti(self):
+        # Só avisa: a regra é aplicada em `setores_ti_ids`, a cada leitura.
+        # Lido uma vez, na subida, que é quando quem configura olha o log.
+        lidos = self.setores_ti
+        if lidos.estado == "ausente":
+            logger.warning(
+                "SETORES_TI_IDS não definida: nenhum técnico tem alcance de TI "
+                "(leitura e alteração só pelo vínculo direto; administração "
+                "global só pelo administrador)"
+            )
+        elif lidos.estado == "vazia":
+            logger.warning(
+                "SETORES_TI_IDS vazia: nenhum técnico tem alcance de TI "
+                "(administração global só pelo administrador)"
+            )
+        elif lidos.estado == "invalida":
+            logger.warning(
+                "SETORES_TI_IDS=%r não é uma lista de ids; nenhum técnico tem alcance "
+                "de TI (administração global só pelo administrador)",
+                self.SETORES_TI_IDS,
+            )
+        else:
+            if lidos.duplicados:
+                logger.warning("SETORES_TI_IDS tem ids repetidos; cada um vale uma vez")
+            if self.SETOR_QUALIDADE_ID is not None and self.SETOR_QUALIDADE_ID in lidos.ids:
+                logger.warning(
+                    "SETORES_TI_IDS inclui o setor da Qualidade (%s); ele não vale como TI",
+                    self.SETOR_QUALIDADE_ID,
+                )
+        return self
+
+    # Contas do painel de parede (ids em `usuarios`), separadas por vírgula.
+    # Elas leem `GET /tarefas-recorrentes/lembretes-do-dia` e nada mais
+    # (API-11, S1): a TV que mostra o lembrete "tarefas do dia" é uma conta de
+    # serviço, e conta de serviço não lê o módulo de tarefas.
+    #
+    # Só vale para conta ativa e com `conta_de_servico` verdadeiro; um id de
+    # pessoa na lista não muda nada para ela. Sem valor padrão e sem exemplo:
+    # o id da TV sai do inventário do ambiente, não deste arquivo.
+    #
+    # Ausente, vazia ou inválida, nenhuma conta lê como painel. A API sobe
+    # assim mesmo, e o aviso vai para o log. Texto cru, pelo mesmo motivo de
+    # SETORES_TI_IDS.
+    PAINEL_CONTAS_IDS: Optional[str] = None
+
+    @property
+    def painel_contas(self) -> ContasDoPainel:
+        return interpretar_painel_contas(self.PAINEL_CONTAS_IDS)
+
+    @property
+    def painel_contas_ids(self) -> FrozenSet[int]:
+        return self.painel_contas.ids
+
+    @model_validator(mode="after")
+    def _avisar_painel_contas(self):
+        # Só avisa, como em SETORES_TI_IDS. O valor não vai para o log: são
+        # ids, mas quem lê o log não precisa saber quais contas são o painel.
+        lidos = self.painel_contas
+        if lidos.estado == "ausente":
+            logger.warning("PAINEL_CONTAS_IDS não definida: nenhuma conta de serviço lê os lembretes do dia")
+        elif lidos.estado == "vazia":
+            logger.warning("PAINEL_CONTAS_IDS vazia: nenhuma conta de serviço lê os lembretes do dia")
+        elif lidos.estado == "invalida":
+            logger.warning(
+                "PAINEL_CONTAS_IDS não é uma lista de ids de usuário; nenhuma conta de serviço "
+                "lê os lembretes do dia"
+            )
+        elif lidos.duplicados:
+            logger.warning("PAINEL_CONTAS_IDS tem ids repetidos; cada um vale uma vez")
+        return self
 
     # CORS
     ALLOWED_ORIGINS: str = "http://localhost:5173"

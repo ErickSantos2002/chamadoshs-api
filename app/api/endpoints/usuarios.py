@@ -32,20 +32,104 @@ def _buscar(db: Session, usuario_id: int) -> Usuario:
     return usuario
 
 
-def _admins_ativos(db: Session, role_id: int) -> int:
-    return (
-        db.query(Usuario)
-        .filter(Usuario.ativo.is_(True), Usuario.role_id == role_id)
-        .count()
+ULTIMO_ADMIN_DESATIVAR = "Não é possível desativar o último administrador ativo"
+ULTIMO_ADMIN_REBAIXAR = "Não é possível rebaixar o último administrador ativo"
+ULTIMO_ADMIN_CONVERTER = "Não é possível tornar conta de serviço o último administrador ativo"
+
+
+def _e_admin_humano_ativo(ativo, role: Role, conta_de_servico) -> bool:
+    """Ativo, perfil de administrador e pessoa — só `True` e `False` contam (API-11, S4)."""
+    return ativo is True and _e_administrador(role) and conta_de_servico is False
+
+
+def _outros_admins_humanos_ativos(db: Session, usuario_id: int) -> int:
+    """
+    Quantos administradores humanos ativos há além de `usuario_id`, com as
+    linhas deles travadas até o fim da transação.
+
+    Conta de serviço não conta (API-11, S4): a conta compartilhada satisfazia
+    a trava, e todo administrador humano podia ser desativado ou rebaixado,
+    sobrando só ela.
+
+    O `FOR UPDATE` é o que segura duas remoções ao mesmo tempo. Sem ele, dois
+    administradores rebaixando um ao outro contariam "um outro" cada um, e os
+    dois passariam. Com ele, o segundo espera o primeiro terminar e, no READ
+    COMMITTED do PostgreSQL, reavalia o filtro sobre a linha já gravada: quem
+    deixou de ser administrador humano sai da conta, e a segunda remoção é
+    recusada. A ordem por id evita impasse entre duas transações que travam o
+    mesmo conjunto. (O SQLite ignora a cláusula e serializa a escrita.)
+    """
+    ids_de_admin = [r.id for r in db.query(Role).all() if _e_administrador(r)]
+    if not ids_de_admin:
+        return 0
+    linhas = (
+        db.query(Usuario.id)
+        .filter(
+            Usuario.ativo.is_(True),
+            Usuario.role_id.in_(ids_de_admin),
+            Usuario.conta_de_servico.is_(False),
+        )
+        .order_by(Usuario.id)
+        .with_for_update()
+        .all()
     )
+    return sum(1 for (uid,) in linhas if uid != usuario_id)
+
+
+def _garantir_que_resta_admin_humano(db: Session, usuario: Usuario, mudancas: dict) -> None:
+    """
+    Recusa a mudança que tiraria do sistema o último administrador humano
+    ativo — desativar, rebaixar ou tornar conta de serviço, juntos ou
+    separados (API-11, S4).
+
+    Olha o estado FINAL da conta com tudo o que a requisição muda, e não cada
+    campo sozinho: um PUT com perfil, `ativo` e `conta_de_servico` juntos não
+    passa por entre as travas de cada um. A mensagem diz a primeira causa, na
+    ordem desativar, rebaixar, converter.
+
+    Do rebaixamento vale o que já valia: quem se rebaixa perde a tela de
+    Cadastros e some da condição de consertar, e o modal envia o perfil em
+    toda gravação — reenviar o mesmo perfil passa. A regra é sobre o último,
+    não sobre si mesmo: sair da equipe é legítimo enquanto houver outro
+    administrador humano ativo.
+
+    Banco que já não tem administrador humano (só contas de serviço): nada
+    aqui o agrava, porque a conta de serviço não administra (S3) e não há
+    humano a remover. A recuperação é fora da aplicação, por SQL direto e
+    decisão registrada — ver AUTH.md, API-11. Não há atalho.
+    """
+    if not _e_admin_humano_ativo(usuario.ativo, usuario.role, usuario.conta_de_servico):
+        return
+
+    ativo = mudancas["ativo"] if "ativo" in mudancas else usuario.ativo
+    role_id = mudancas.get("role_id") or usuario.role_id
+    # Perfil inexistente cai como "não é administrador", a leitura segura. Na
+    # prática não chega: `_garantir_vinculos_existentes` já devolveu 400.
+    role = usuario.role if role_id == usuario.role_id else db.query(Role).filter(Role.id == role_id).first()
+    servico = mudancas.get("conta_de_servico")
+    if servico is None:
+        servico = usuario.conta_de_servico
+
+    if _e_admin_humano_ativo(ativo, role, servico):
+        return
+    if _outros_admins_humanos_ativos(db, usuario.id) > 0:
+        return
+
+    if ativo is not True:
+        motivo = ULTIMO_ADMIN_DESATIVAR
+    elif not _e_administrador(role):
+        motivo = ULTIMO_ADMIN_REBAIXAR
+    else:
+        motivo = ULTIMO_ADMIN_CONVERTER
+    raise HTTPException(status_code=400, detail=motivo)
 
 
 def _garantir_desativacao_segura(db: Session, usuario: Usuario, admin: Usuario) -> None:
     """
     Recusa as duas desativações que deixariam o sistema sem quem administrar:
-    a de si mesmo e a do último administrador ativo. Como criar e editar
-    usuário também exigem administrador, não haveria recuperação pela
-    aplicação — só por SQL direto no banco.
+    a de si mesmo e a do último administrador humano ativo. Como criar e
+    editar usuário também exigem administrador humano, não haveria
+    recuperação pela aplicação — só por SQL direto no banco.
 
     Vale para os dois caminhos que desativam. Enquanto a checagem morava só no
     DELETE, um PUT {"ativo": false} passava por cima dela e derrubava o último
@@ -57,12 +141,7 @@ def _garantir_desativacao_segura(db: Session, usuario: Usuario, admin: Usuario) 
             detail="Não é possível desativar o próprio usuário",
         )
 
-    if usuario.ativo and _e_administrador(usuario.role):
-        if _admins_ativos(db, usuario.role_id) <= 1:
-            raise HTTPException(
-                status_code=400,
-                detail="Não é possível desativar o último administrador ativo",
-            )
+    _garantir_que_resta_admin_humano(db, usuario, {"ativo": False})
 
 
 def _garantir_vinculos_existentes(db: Session, dados: dict) -> None:
@@ -86,45 +165,6 @@ def _garantir_vinculos_existentes(db: Session, dados: dict) -> None:
     setor_id = dados.get("setor_id")
     if setor_id is not None and not db.query(Setor).filter(Setor.id == setor_id).first():
         raise HTTPException(status_code=400, detail=f"Setor {setor_id} não existe")
-
-
-def _garantir_rebaixamento_seguro(db: Session, usuario: Usuario, novo_role_id: int) -> None:
-    """
-    Recusa tirar o perfil de administrador do último administrador ativo.
-
-    Deixa o sistema no mesmo estado que a desativação — sem ninguém para
-    administrar — mas a recuperação é pior: quem se rebaixa perde o acesso à
-    tela de Cadastros, que é exclusiva de administrador, e some da própria
-    condição de consertar. O desativado ao menos continua listado para outro
-    administrador reativar.
-
-    E o caminho é de tela, não de API: o modal de usuário envia o perfil em
-    toda gravação, então trocar o próprio para "Usuario" e salvar são três
-    cliques.
-
-    A regra é sobre o último, não sobre si mesmo: quem sai da equipe rebaixa a
-    própria conta, e isso é legítimo enquanto houver outro administrador ativo.
-    Reenviar o mesmo perfil também passa — é o que o modal faz em toda
-    gravação, inclusive quando só se mexeu no setor.
-    """
-    if not usuario.ativo or not _e_administrador(usuario.role):
-        return
-
-    if novo_role_id == usuario.role_id:
-        return
-
-    # Perfil inexistente cai aqui como "não é administrador", que é a leitura
-    # segura. Na prática não chega: `_garantir_vinculos_existentes` roda antes e
-    # já devolveu 400. A leitura continua sendo a conservadora para o caso de a
-    # ordem das chamadas mudar — errar aqui custa um rebaixamento indevido.
-    if _e_administrador(db.query(Role).filter(Role.id == novo_role_id).first()):
-        return
-
-    if _admins_ativos(db, usuario.role_id) <= 1:
-        raise HTTPException(
-            status_code=400,
-            detail="Não é possível rebaixar o último administrador ativo",
-        )
 
 
 @router.get("/", response_model=List[UsuarioResponse])
@@ -273,8 +313,9 @@ def atualizar_usuario(
     if update_data.get("ativo") is False:
         _garantir_desativacao_segura(db, usuario, admin)
 
-    if update_data.get("role_id") is not None:
-        _garantir_rebaixamento_seguro(db, usuario, update_data["role_id"])
+    # Perfil, `ativo` e `conta_de_servico` juntos: o estado final decide
+    # (API-11, S4). Reativar segue sem trava — é o caminho de volta.
+    _garantir_que_resta_admin_humano(db, usuario, update_data)
 
     # Se está atualizando a senha, gera o hash
     if 'senha' in update_data:

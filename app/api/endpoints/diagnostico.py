@@ -26,9 +26,12 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from app.api.deps import get_db
+from app.api.deps import get_db, is_admin, is_conta_do_painel, is_staff
+from app.core.config import settings
+from app.models.setor import Setor
 from app.models.usuario import Usuario
 from app.models.role import Role
+from app.services.leitura_service import setores_lidos_pelo_perfil
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +135,111 @@ def diagnostico_geral(db: Session = Depends(get_db)):
         diagnostico["usuarios"]["erro"] = "❌ ERRO ao consultar (detalhe no log da aplicação)"
         diagnostico["status"] = "erro"
 
+    try:
+        # 10. Setores da TI (API-6): o que a configuração diz e se o cadastro
+        # confirma. A configuração não enxerga o banco — é aqui que um id
+        # inexistente ou inativo aparece.
+        diagnostico["equipes"] = _diagnostico_das_equipes(db)
+    except Exception:
+        logger.error("Diagnóstico: conferência dos setores da TI falhou", exc_info=True)
+        diagnostico["equipes"] = {"erro": "❌ ERRO ao consultar (detalhe no log da aplicação)"}
+        diagnostico["status"] = "erro"
+
+    try:
+        # 11. Contas do painel (API-11, S1): a mesma conferência, para
+        # PAINEL_CONTAS_IDS contra `usuarios`.
+        diagnostico["painel"] = _diagnostico_do_painel(db)
+    except Exception:
+        logger.error("Diagnóstico: conferência das contas do painel falhou", exc_info=True)
+        diagnostico["painel"] = {"erro": "❌ ERRO ao consultar (detalhe no log da aplicação)"}
+        diagnostico["status"] = "erro"
+
     return diagnostico
+
+
+def _diagnostico_do_painel(db: Session) -> dict:
+    """
+    `PAINEL_CONTAS_IDS` contra o cadastro: quais ids leem os lembretes agora
+    e por que os outros não leem. Só ids — nem nome, nem perfil, nem setor:
+    reconhecer qual conta é a TV é dos SELECTs de docs/contas-de-servico.md.
+    """
+    lidos = settings.painel_contas
+    contas = {u.id: u for u in db.query(Usuario).filter(Usuario.id.in_(lidos.ids)).all()} if lidos.ids else {}
+    inexistentes = sorted(i for i in lidos.ids if i not in contas)
+    inativas = sorted(i for i, u in contas.items() if u.ativo is not True)
+    humanas = sorted(i for i, u in contas.items() if u.conta_de_servico is not True)
+    autorizadas = sorted(i for i, u in contas.items() if is_conta_do_painel(u))
+
+    alertas = []
+    if lidos.estado != "valida":
+        alertas.append(f"⚠️ PAINEL_CONTAS_IDS {lidos.estado}: nenhuma conta lê os lembretes como painel")
+    if inexistentes:
+        alertas.append(f"⚠️ PAINEL_CONTAS_IDS cita usuário(s) inexistente(s): {inexistentes}")
+    if inativas:
+        alertas.append(f"⚠️ PAINEL_CONTAS_IDS cita conta(s) inativa(s), que não leem: {inativas}")
+    if humanas:
+        alertas.append(f"⚠️ PAINEL_CONTAS_IDS cita conta(s) que não são de serviço, que não leem como painel: {humanas}")
+
+    return {
+        "painel_contas_ids": {
+            "estado": lidos.estado,
+            "configurados": sorted(lidos.ids),
+            "autorizadas": autorizadas,
+            "inexistentes": inexistentes,
+            "inativas": inativas,
+            "nao_sao_de_servico": humanas,
+        },
+        "alertas": alertas,
+    }
+
+
+def _diagnostico_das_equipes(db: Session) -> dict:
+    """
+    `SETORES_TI_IDS` contra o cadastro, e quantos técnicos ativos ficam sem
+    alcance por perfil — os que só leem pelo vínculo (H1, D10).
+
+    Só ids e contagens: os nomes das pessoas ficam para os SELECTs de
+    diagnóstico do CHANGELOG, rodados por quem administra o banco.
+    """
+    lidos = settings.setores_ti
+    setores = {s.id: s for s in db.query(Setor).filter(Setor.id.in_(lidos.ids)).all()} if lidos.ids else {}
+    qualidade = settings.SETOR_QUALIDADE_ID
+    tecnicos = [
+        u for u in db.query(Usuario).filter(Usuario.ativo.is_(True)).all()
+        if is_staff(u) and not is_admin(u)
+    ]
+    sem_alcance = sum(1 for u in tecnicos if not setores_lidos_pelo_perfil(u))
+
+    alertas = []
+    if lidos.estado != "valida" or not settings.setores_ti_ids:
+        alertas.append(
+            f"⚠️ SETORES_TI_IDS {lidos.estado}: nenhum técnico tem alcance de TI "
+            "nem administra cadastros; só o administrador"
+        )
+    inexistentes = sorted(i for i in lidos.ids if i not in setores)
+    inativos = sorted(i for i, s in setores.items() if not s.ativo)
+    if inexistentes:
+        alertas.append(f"⚠️ SETORES_TI_IDS cita setor(es) inexistente(s): {inexistentes}")
+    if inativos:
+        alertas.append(f"⚠️ SETORES_TI_IDS cita setor(es) inativo(s): {inativos}")
+    if qualidade is not None and qualidade in lidos.ids:
+        alertas.append("⚠️ SETORES_TI_IDS inclui o setor da Qualidade, que não vale como TI")
+    if sem_alcance:
+        alertas.append(f"⚠️ {sem_alcance} técnico(s) ativo(s) sem alcance por perfil: só leem pelo vínculo")
+
+    return {
+        "setores_ti_ids": {
+            "estado": lidos.estado,
+            "configurados": sorted(lidos.ids),
+            "validos_como_ti": sorted(settings.setores_ti_ids),
+            "inexistentes": inexistentes,
+            "inativos": inativos,
+        },
+        "setor_qualidade_id": qualidade,
+        "tecnicos_ativos": len(tecnicos),
+        "tecnicos_ativos_sem_alcance": sem_alcance,
+        "alertas": alertas,
+    }
 
 
 @router.get("/usuarios-sem-senha")

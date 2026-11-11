@@ -25,7 +25,55 @@ def gerar_protocolo(db: Session) -> str:
     return f"CHAM-{ano_atual}-{numero:04d}"
 
 
-def registrar_historico(
+# Título gerado para os chamados da Qualidade, cujo formulário não tem título.
+TITULO_DERIVADO_MAXIMO = 80
+# Abaixo disto a primeira linha não diz nada sozinha ("Oi", "Bom dia"), e o
+# título passa a ser o começo da descrição inteira. É o mesmo mínimo do título
+# digitado na TI.
+TITULO_DERIVADO_MINIMO_DA_LINHA = 10
+
+
+def derivar_titulo(descricao: str) -> str:
+    """
+    Título a partir da descrição: a primeira linha com texto, ou — se ela for
+    curta demais para identificar o chamado — o começo da descrição inteira.
+
+    Espaços, tabs e quebras de linha repetidos viram um espaço só, e o
+    resultado tem no máximo `TITULO_DERIVADO_MAXIMO` caracteres, com "…" no
+    corte. Nunca vazio para uma descrição com algum texto, que é o que o
+    schema de criação garante.
+    """
+    linhas = (" ".join(linha.split()) for linha in descricao.splitlines())
+    primeira = next((linha for linha in linhas if linha), "")
+
+    if len(primeira) >= TITULO_DERIVADO_MINIMO_DA_LINHA:
+        titulo = primeira
+    else:
+        titulo = " ".join(descricao.split())
+
+    if len(titulo) <= TITULO_DERIVADO_MAXIMO:
+        return titulo
+    return titulo[: TITULO_DERIVADO_MAXIMO - 1].rstrip() + "…"
+
+
+# Transições da rota de atendimento da Qualidade: as mesmas ações rápidas do
+# frontend (`AcoesRapidas.tsx` e `ChamadoDetalhes.tsx`). O PUT da equipe não
+# passa por aqui e continua sem restrição de transição.
+TRANSICOES_DO_ATENDIMENTO = {
+    "Aberto": frozenset({"Em Andamento"}),
+    "Em Andamento": frozenset({"Aguardando", "Resolvido"}),
+    "Aguardando": frozenset({"Em Andamento", "Resolvido"}),
+    "Resolvido": frozenset({"Em Andamento"}),
+    "Fechado": frozenset({"Em Andamento"}),
+}
+
+
+def transicao_permitida(status_atual: str, status_novo: str) -> bool:
+    """Se o atendimento pode levar o chamado de um status ao outro."""
+    return status_novo in TRANSICOES_DO_ATENDIMENTO.get(status_atual, frozenset())
+
+
+def adicionar_historico(
     db: Session,
     chamado_id: int,
     usuario_id: int,
@@ -35,7 +83,10 @@ def registrar_historico(
     status_novo: str = None
 ):
     """
-    Registra uma ação no histórico do chamado
+    Põe uma ação do histórico na transação atual, SEM commit.
+
+    Para as escritas da Qualidade (API-4b), em que chamado e histórico saem no
+    mesmo commit e uma falha desfaz os dois. Quem chama faz o commit.
     """
     historico = HistoricoChamado(
         chamado_id=chamado_id,
@@ -46,6 +97,27 @@ def registrar_historico(
         status_novo=status_novo
     )
     db.add(historico)
+    return historico
+
+
+def registrar_historico(
+    db: Session,
+    chamado_id: int,
+    usuario_id: int,
+    acao: str,
+    descricao: str = None,
+    status_anterior: str = None,
+    status_novo: str = None
+):
+    """
+    Registra uma ação no histórico do chamado, com commit próprio.
+
+    O commit leva junto o que mais estiver pendente na sessão — é assim que o
+    atendimento grava chamado e histórico juntos.
+    """
+    historico = adicionar_historico(
+        db, chamado_id, usuario_id, acao, descricao, status_anterior, status_novo
+    )
     db.commit()
     return historico
 

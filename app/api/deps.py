@@ -3,6 +3,7 @@ from typing import Generator, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session, joinedload
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.security import decodificar_token
 from app.models.usuario import Usuario
@@ -126,14 +127,122 @@ def require_roles(*nomes: str):
     return _verificar
 
 
-require_admin = require_roles(ROLE_ADMIN)
+_require_perfil_admin = require_roles(ROLE_ADMIN)
 require_staff = require_roles(ROLE_ADMIN, ROLE_TECNICO)
 
 
 def is_admin(usuario: Usuario) -> bool:
+    """
+    O perfil de administrador, só o perfil. Vale para a LEITURA (o
+    administrador lê todos os chamados), inclusive na conta de serviço: o
+    painel de parede pode ser uma. Para administrar, `is_admin_humano`.
+    """
     return _normalizar_role(usuario.role.nome if usuario.role else None) == _normalizar_role(ROLE_ADMIN)
+
+
+def is_admin_humano(usuario: Usuario) -> bool:
+    """
+    Administrador que é pessoa (API-11, S3): o perfil e `conta_de_servico`
+    igual a `False`.
+
+    O perfil sozinho não faz da conta de serviço um operador humano
+    privilegiado. A conta compartilhada de administração (migration de
+    `conta_de_servico`) resetava a senha de qualquer um, excluía chamado de
+    vez e mudava perfil — e a trilha dizia "foi a conta", não quem. Só
+    `False` conta como pessoa, como em `integra_equipe_ti`.
+    """
+    return is_admin(usuario) and usuario.conta_de_servico is False
+
+
+CONTA_DE_SERVICO_SEM_ADMINISTRACAO = "Conta de serviço não executa administração"
+
+
+def require_admin(current_user: Usuario = Depends(_require_perfil_admin)) -> Usuario:
+    """
+    Exige administrador humano (API-11, S3): o perfil, e não ser conta de
+    serviço.
+
+    Cobre tudo o que é só do administrador: usuários (criar, editar — senha,
+    perfil, setor, `conta_de_servico` —, desativar, reativar, eventos),
+    `POST /auth/registro`, excluir chamado e setor, e o diagnóstico. A conta de
+    serviço administradora continua autenticando e lendo; recebe 403 aqui,
+    com um motivo próprio — quem não tem o perfil recebe o de sempre.
+    """
+    if current_user.conta_de_servico is not False:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=CONTA_DE_SERVICO_SEM_ADMINISTRACAO)
+    return current_user
 
 
 def is_staff(usuario: Usuario) -> bool:
     atual = _normalizar_role(usuario.role.nome if usuario.role else None)
     return atual in {_normalizar_role(ROLE_ADMIN), _normalizar_role(ROLE_TECNICO)}
+
+
+EQUIPE_TI_NEGADA = "Requer perfil: Administrador ou Técnico da TI"
+
+
+def require_equipe_ti(current_user: Usuario = Depends(get_current_user)) -> Usuario:
+    """
+    Exige administrador ou técnico da TI (API-7, D13): a administração global
+    — setores, categorias, SLA, tarefas recorrentes e a trilha de setor.
+
+    Até a API-6 essas rotas usavam `require_staff`, e técnico de QUALQUER
+    setor as administrava: o da Qualidade, o de outro setor, o sem setor. O
+    perfil sozinho não diz de qual equipe a pessoa é.
+
+    Quem é da TI sai de `integra_equipe_ti`, a mesma regra da API-6 que decide
+    o responsável de chamado da TI e que `/auth/me` devolve à tela — uma regra
+    só, para que a tela, a atribuição e a administração não discordem. Sem
+    `SETORES_TI_IDS` válida, nenhum técnico passa; o administrador passa
+    sempre, pelo perfil, esteja em que setor estiver.
+
+    403, e não 404: são recursos globais, cuja existência não é segredo (D6
+    vale para chamados e comentários). Mesmo corpo para toda recusa.
+
+    O administrador é o humano (API-11, S3): a conta de serviço
+    administradora não passa mais pelo perfil, e a técnica já não passava
+    (API-10). Nenhuma conta de serviço administra o que esta dependency guarda.
+    """
+    # Import tardio: `leitura_service` importa `is_admin` e `is_staff` daqui.
+    from app.services.leitura_service import integra_equipe_ti
+
+    # `integra_equipe_ti` já exige perfil de equipe: usuário comum e perfil
+    # desconhecido não passam, nem num setor da TI.
+    if is_admin_humano(current_user) or integra_equipe_ti(current_user):
+        return current_user
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=EQUIPE_TI_NEGADA)
+
+
+def is_conta_do_painel(usuario: Usuario) -> bool:
+    """
+    Conta de serviço do painel de parede (API-11, S1): ativa, com
+    `conta_de_servico` verdadeiro e com o id em `PAINEL_CONTAS_IDS`.
+
+    As três vêm do usuário que `get_current_user` leu do banco pelo `sub` do
+    token — nada do pedido, nem nome, perfil, setor, IP ou User-Agent. O
+    `ativo` é conferido de novo aqui, embora `get_current_user` já recuse o
+    inativo: esta exceção não pode depender de quem a chama. Um id de pessoa
+    na lista não vale: a lista não é autorização por id, é a identificação da
+    TV entre as contas de serviço.
+    """
+    return (
+        usuario.conta_de_servico is True
+        and usuario.ativo is True
+        and usuario.id in settings.painel_contas_ids
+    )
+
+
+def require_leitura_dos_lembretes(current_user: Usuario = Depends(get_current_user)) -> Usuario:
+    """
+    Quem lê `GET /tarefas-recorrentes/lembretes-do-dia` (API-11, S1): quem
+    passa em `require_equipe_ti`, e a conta do painel (`is_conta_do_painel`).
+
+    Só esta rota usa esta dependency. A conta do painel não vira equipe —
+    `integra_equipe_ti`, `/auth/me` e as sete rotas do módulo não mudam — nem
+    administradora, qualquer que seja o perfil dela. A recusa é a de
+    `require_equipe_ti`, o mesmo corpo para todos: estar ou não na lista não
+    aparece na resposta.
+    """
+    if is_conta_do_painel(current_user):
+        return current_user
+    return require_equipe_ti(current_user)

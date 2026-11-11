@@ -190,23 +190,59 @@ ChamadosHS/
 
 ## 🔐 Perfis de Acesso
 
+Resumo. A regra completa, rota a rota, está em [AUTH.md](AUTH.md) ("Restrições
+por perfil" e "Leitura de chamado").
+
 ### Administrador
 - Acesso total ao sistema
-- Gerenciar usuários, setores e categorias
+- Gerenciar usuários, setores (inclusive excluir), categorias, SLA e
+  tarefas recorrentes
 - Visualizar todos os chamados
 - Gerar relatórios completos
+- Administrar é de pessoa: conta de serviço com perfil Administrador lê
+  todos os chamados, mas não administra nada (API-11). O último
+  administrador humano ativo não pode ser rebaixado, desativado nem virar
+  conta de serviço. Política em
+  [docs/contas-de-servico.md](docs/contas-de-servico.md)
 
 ### Técnico
-- Visualizar e gerenciar chamados atribuídos
-- Comentar e resolver chamados
-- Visualizar histórico completo
+- Técnico da TI (setor listado em `SETORES_TI_IDS`): visualizar e gerenciar
+  os chamados da TI e da Qualidade, e ser responsável por chamado da TI
+  enquanto estiver ativo (API-9; a lista de quem pode receber chamado da TI
+  é `GET /chamados/responsaveis-ti`);
+  administrar setores (sem excluir), categorias, prazos de SLA e tarefas
+  recorrentes, e ver a trilha de setores
+- Técnico da Qualidade (setor de `SETOR_QUALIDADE_ID`): visualizar e
+  gerenciar os chamados da Qualidade; da TI, só ver os que abriu ou atende
+- Técnico de outro setor, ou sem setor: só os chamados que abriu ou atende
+- Fora da TI, nenhum técnico administra cadastros, SLA ou rotinas — nem o da
+  Qualidade (API-7)
+- Comentar e resolver; comentário interno, só o técnico da TI (API-8) — o
+  da Qualidade, o de outro setor e o sem setor não o veem nem o criam
+- Conta de serviço nunca é da equipe da TI (API-10): não administra, não vê
+  nem cria comentário interno e não recebe chamado da TI, mesmo com perfil
+  Técnico num setor da TI. Lê os chamados do alcance do perfil, mas não os
+  altera como equipe (API-11)
+- Painel de parede: a conta de serviço da TV, se o id dela estiver em
+  `PAINEL_CONTAS_IDS` (vazia por padrão), lê os lembretes do dia
+  (`GET /tarefas-recorrentes/lembretes-do-dia`) e nada mais (API-11)
 - Gerar relatórios da equipe
 
 ### Usuário
 - Abrir novos chamados
-- Visualizar seus próprios chamados
-- Comentar em seus chamados
+- Visualizar e comentar os chamados que abriu ou que atende hoje (atendimento
+  da Qualidade)
 - Avaliar atendimento
+
+Quem não pode ver um chamado recebe o mesmo 404 de um chamado que não existe,
+também ao tentar alterá-lo, cancelá-lo, avaliá-lo, atendê-lo ou mexer nos
+comentários dele.
+
+**`SETORES_TI_IDS` precisa estar configurada:** sem ela nenhum técnico é da
+TI, e a administração fica só com o administrador (ver `.env.example` e a seção "Ação necessária no deploy" do
+[CHANGELOG](CHANGELOG.md)). Os ids saem do cadastro de cada ambiente, por
+`diagnosticos/api6_setores_ti.sql`; num banco local criado pelo
+`schema_chamados.sql`, quem decide quais setores são da TI é você.
 
 ## 📊 Fluxo de Chamados
 
