@@ -496,6 +496,17 @@ recebem 403 e usam o `PUT`. O corpo aceita só `status` e `solucao`; qualquer
 outro campo é 422. Avaliar (`PATCH /chamados/{id}/avaliar`, só o solicitante)
 segue o mesmo princípio.
 
+**O atendimento da Qualidade é da equipe, não só do responsável** (decisão
+do responsável pelo projeto, 11/11/2026). O "só o responsável atual" acima é
+a regra **desta rota**, não a do atendimento: qualquer Técnico do setor da
+Qualidade inicia ou continua o atendimento e muda o status de um chamado da
+Qualidade atribuído a um colega, pelo `PUT` da equipe (ver "Escrita de
+chamado pela equipe"). O responsável fica gravado para organização e
+rastreabilidade, e não dá exclusividade — é o mesmo modelo da TI. O que não
+muda: o técnico da TI não alcança a Qualidade, e o técnico da Qualidade que lê
+um chamado da TI só pelo vínculo (abriu, ou é o responsável) não o atende nem
+o edita.
+
 No `PUT` (equipe), trocar o responsável de um chamado da Qualidade só é aceito
 para conta elegível — a mesma regra da abertura. Na TI, vale a D9, acima.
 
