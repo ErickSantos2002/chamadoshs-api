@@ -479,17 +479,45 @@ trocado sozinho. A regra mora em `responsavel_ti_service`, e
 `GET /chamados/responsaveis-ti` (`require_equipe_ti`, só `id` e `nome`)
 devolve exatamente quem ela aceita: é a lista que o seletor deve oferecer.
 
-**Responsável de chamado da Qualidade (API-13):** quem abre escolhe, e o
-chamado nasce atribuído. Só conta com perfil **Técnico**, ativa, que não seja
-conta de serviço e lotada no setor de `SETOR_QUALIDADE_ID`; senão 400
-`"Atendente não é elegível para a Qualidade"` — o usuário comum e o
-administrador do setor também (até a API-12 valia qualquer perfil do setor).
-A regra mora em `qualidade_service.eh_elegivel`, e
-`GET /chamados/atendentes-qualidade` devolve exatamente quem ela aceita.
+**Responsável de chamado da Qualidade (API-13, API-14):** o chamado nasce
+**sem responsável** — "aguardando atribuição" é a ausência dele, sem estado
+novo no banco —, e a equipe da Qualidade o distribui (decisão do responsável
+pelo projeto, 11/11/2026; até a API-13 quem abria escolhia, e o chamado
+nascia atribuído). O responsável enviado na abertura continua aceito e
+validado, para o cliente de antes da API-14. Só conta com perfil **Técnico**,
+ativa, que não seja conta de serviço e lotada no setor de
+`SETOR_QUALIDADE_ID`; senão 400 `"Atendente não é elegível para a Qualidade"`
+— o usuário comum e o administrador do setor também (até a API-12 valia
+qualquer perfil do setor). A regra mora em `qualidade_service.eh_elegivel`, e
+`GET /chamados/atendentes-qualidade` devolve exatamente quem ela aceita. Sem
+nenhuma conta elegível, a abertura sem responsável é recusada com 409
+`"Não há técnico da Qualidade disponível para receber chamados no momento"`:
+o chamado ficaria numa fila que ninguém da equipe vê.
+
+**Distribuição do chamado da Qualidade (API-14):** atribuir e redistribuir é
+do `PUT` da equipe — o Técnico da Qualidade e o administrador humano —, e só
+para conta elegível. Quem assume o chamado atribui a si mesmo pelo mesmo
+caminho. O solicitante e o usuário comum recebem 403; o técnico da TI, o 404
+de quem não lê. Cada troca fica no histórico do chamado
+(`"Atribuição de responsável"`), com o autor do token, o responsável
+anterior e o novo, no mesmo commit da troca. A versão é obrigatória, e de
+duas atribuições simultâneas com a mesma versão só uma vale (409 na outra).
+O chamado atribuído não volta à fila: `tecnico_responsavel_id: null` em
+chamado com responsável segue 400 `"Chamado da Qualidade precisa de
+responsável"`.
+
+**Sem responsável o atendimento não começa (API-14):** em chamado da
+Qualidade que aguarda atribuição, mudar o status é recusado com 409
+`"Chamado aguardando atribuição: defina o responsável antes de iniciar o
+atendimento"` — a mesma resposta no `PUT` da equipe e em
+`PATCH /chamados/{id}/atendimento`, para qualquer perfil, administrador
+incluído. A requisição que atribui e muda o status de uma vez é aceita. Os
+outros campos (prioridade, observações) seguem editáveis, e o solicitante
+continua podendo cancelar.
 
 **Pelo chamado, não pelo perfil:** `PATCH /chamados/{id}/atendimento` — mudar
-o status e registrar a solução de um chamado da Qualidade. Só o responsável
-atual, e só se a conta for elegível para a Qualidade (Técnico, ativa, não
+o status e registrar a solução de um chamado da Qualidade já atribuído. Só o
+responsável atual, e só se a conta for elegível para a Qualidade (Técnico, ativa, não
 conta de serviço, do setor configurado), conferido no banco a cada requisição. Perfil
 não dá passe: administrador e técnico que não cumprem as duas condições
 recebem 403 e usam o `PUT`. O corpo aceita só `status` e `solucao`; qualquer
@@ -502,7 +530,9 @@ a regra **desta rota**, não a do atendimento: qualquer Técnico do setor da
 Qualidade inicia ou continua o atendimento e muda o status de um chamado da
 Qualidade atribuído a um colega, pelo `PUT` da equipe (ver "Escrita de
 chamado pela equipe"). O responsável fica gravado para organização e
-rastreabilidade, e não dá exclusividade — é o mesmo modelo da TI. O que não
+rastreabilidade, e não dá exclusividade — é o mesmo modelo da TI, com uma
+diferença: na Qualidade o chamado precisa ter um responsável antes de
+alguém o atender (API-14, acima); na TI, não. O que não
 muda: o técnico da TI não alcança a Qualidade, e o técnico da Qualidade que lê
 um chamado da TI só pelo vínculo (abriu, ou é o responsável) não o atende nem
 o edita.

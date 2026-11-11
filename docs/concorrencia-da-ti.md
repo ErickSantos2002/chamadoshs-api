@@ -89,7 +89,7 @@ o FE-5 já trata ("Outra pessoa salvou este chamado enquanto você salvava").
 
 | Rota | Entrada | Altera | Quem | Aceita versão | Exige | Sobe `versao` | Trava | Histórico | Webhook |
 |---|---|---|---|---|---|---|---|---|---|
-| `PUT /chamados/{id}` | `ChamadoUpdate` | qualquer campo enviado | equipe no alcance (humano) | sim | Qualidade | sim | Qualidade; TI com versão | só troca de status | TI, troca de responsável, depois do commit |
+| `PUT /chamados/{id}` | `ChamadoUpdate` | qualquer campo enviado | equipe no alcance (humano) | sim | Qualidade | sim | Qualidade; TI com versão | troca de status; na Qualidade, também a de responsável (API-14) | TI, troca de responsável, depois do commit |
 | `PATCH .../cancelar` | `ChamadoMarca` opcional | `cancelado` | solicitante; equipe no alcance | sim | Qualidade | sim | Qualidade; TI com versão | sim | não |
 | `PATCH .../arquivar` | idem | `arquivado` | equipe no alcance | sim | Qualidade | sim | idem | sim | não |
 | `PATCH .../desarquivar` | idem | `arquivado` | equipe no alcance | sim | Qualidade | sim | idem | sim | não |

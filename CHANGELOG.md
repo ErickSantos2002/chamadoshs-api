@@ -12,6 +12,69 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Mudado — distribuição interna dos chamados da Qualidade (API-14)
+- **O chamado da Qualidade nasce sem responsável.** Quem abre não escolhe
+  mais quem atende: `tecnico_responsavel_id` passou a ser opcional em
+  `ChamadoCreateQualidade`, e sem ele — ou com `null` — o chamado é gravado
+  aguardando atribuição. Não há estado novo: "aguardando atribuição" é a
+  ausência de responsável, que a coluna sempre aceitou. O histórico da
+  abertura registra `Setor de destino: Qualidade | Aguardando atribuição`.
+- **Compatível com o front 1.8.1.** O responsável enviado na abertura
+  continua aceito e validado pela mesma regra (400 para inelegível ou
+  inexistente): a API-14 pode subir antes do front novo, e segue servindo o
+  antigo num rollback do front.
+- **Sem técnico elegível, a abertura sem responsável é recusada**: 409
+  `Não há técnico da Qualidade disponível para receber chamados no momento`.
+  Nenhuma conta da equipe veria o chamado. A Qualidade não configurada segue
+  503.
+- **A equipe distribui pelo `PUT`.** O Técnico da Qualidade e o administrador
+  humano atribuem e redistribuem, só para conta elegível
+  (`qualidade_service.eh_elegivel`, sem mudança). As permissões são as que o
+  `PUT` já tinha: usuário comum 403, técnico da TI 404, conta de serviço 403.
+- **Atribuição e redistribuição ficam no histórico.** Ação
+  `Atribuição de responsável`, com o autor do token e a descrição
+  `Responsável definido: <novo> (antes: aguardando atribuição)` ou
+  `Responsável alterado de <anterior> para <novo>`, no mesmo commit da troca
+  (linha travada). Até aqui o `PUT` não registrava troca de responsável em
+  nenhum setor; **na TI continua sem registrar**. A entrada não tem status, e
+  o cálculo de SLA, que lê o histórico pelos status, não a enxerga.
+- **Sem responsável o atendimento não começa.** Em chamado da Qualidade sem
+  responsável, mudar o status é 409 `Chamado aguardando atribuição: defina o
+  responsável antes de iniciar o atendimento`, igual no `PUT` da equipe e no
+  `PATCH /chamados/{id}/atendimento` (que antes respondia 403 "Só o
+  responsável atual"), depois da conferência de versão. Vale para o
+  administrador. Atribuir e mudar o status na mesma requisição é aceito;
+  prioridade e observações seguem editáveis; o cancelamento pelo solicitante
+  não muda.
+- **O atribuído não volta à fila.** Desatribuir chamado da Qualidade segue
+  400 `Chamado da Qualidade precisa de responsável`.
+- **Atendimento compartilhado preservado:** depois de atribuído, qualquer
+  Técnico da Qualidade atende pelo `PUT`, e a rota `/atendimento` segue só do
+  responsável atual. **Isolamento TI × Qualidade preservado:** nenhuma regra
+  de leitura ou de equipe mudou. **TI inalterada:** abertura, atribuição,
+  desatribuição, webhook e atendimento sem responsável como antes.
+- Concorrência: a trava de linha e a `versao_esperada` obrigatória da
+  Qualidade valem para a atribuição como já valiam; de duas atribuições com a
+  mesma versão, uma grava e a outra recebe 409.
+- Sem migration, sem variável nova, sem notificação nova.
+- Testes: `tests/test_distribuicao_qualidade.py` (novo) e a classe
+  `TestT4bDistribuicaoDoChamadoSemResponsavel` em
+  `tests/test_concorrencia_versao_postgres.py`. Mudaram de expectativa, por
+  serem a regra antiga: `test_sem_responsavel_e_422` e
+  `test_responsavel_nulo_e_422` (saem; a abertura sem responsável agora é
+  aceita), `test_nao_registra_historico_de_reatribuicao` (passa a registrar) e
+  três conferências de histórico que contavam zero entradas na reatribuição.
+
+#### Ação necessária no deploy
+- **Antes** do front que tira o campo "Responsável" da abertura: o front novo
+  contra a API-13 recebe 422 ao abrir para a Qualidade. A ordem inversa é
+  segura.
+- Nenhuma migration e nenhuma variável. Chamados existentes não mudam.
+- Rollback da imagem: os chamados já abertos sem responsável continuam
+  legíveis e editáveis na API-13, e podem ser atribuídos por ela; ela só não
+  impede o atendimento antes da atribuição, e volta a exigir responsável na
+  abertura (o front novo passaria a receber 422).
+
 ### Segurança — cada equipe no seu setor de destino (API-13)
 - **O técnico da TI deixa de ler e de alterar os chamados da Qualidade.**
   Até a API-12, pela decisão D1, o perfil Técnico num setor de
