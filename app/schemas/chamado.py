@@ -169,8 +169,10 @@ class ChamadoCreateQualidade(BaseModel):
     Chamado novo para a Qualidade.
 
     O formulário da Qualidade não tem título nem categoria: o título é gerado
-    da descrição e a categoria fica nula. O responsável é obrigatório e passa
-    pela regra de elegibilidade no endpoint (`qualidade_service`).
+    da descrição e a categoria fica nula. O responsável é opcional (API-14):
+    sem ele, ou com `null`, o chamado nasce aguardando atribuição, e a equipe
+    da Qualidade o distribui. Se vier — o cliente de antes da API-14 —, passa
+    pela regra de elegibilidade no endpoint (`qualidade_service`), como antes.
 
     `titulo` e `categoria_id` estão declarados só para serem recusados. É a
     presença que conta, não o valor — até `null` é recusado: receber esses
@@ -193,9 +195,12 @@ class ChamadoCreateQualidade(BaseModel):
     )
     prioridade: PrioridadeEnum = PrioridadeEnum.MEDIA
     solicitante_id: int
-    tecnico_responsavel_id: int = Field(
-        ...,
-        description="Atendente da Qualidade. Opções em GET /chamados/atendentes-qualidade.",
+    tecnico_responsavel_id: Optional[int] = Field(
+        None,
+        description=(
+            "Opcional: sem ele o chamado nasce aguardando atribuição pela equipe. "
+            "Se enviado, um atendente de GET /chamados/atendentes-qualidade."
+        ),
     )
 
     @field_validator("titulo", "categoria_id", mode="before")

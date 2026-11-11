@@ -1,12 +1,15 @@
 """
 Abertura de chamado para a Qualidade.
 
-O formulário da Qualidade tem descrição, prioridade e responsável — sem título
-e sem categoria. A API completa o que falta: o título sai da descrição, a
-categoria fica nula, e o responsável escolhido é validado contra a regra de
-elegibilidade (ver `test_atendentes_qualidade.py`). Desde a API-13 só o
-Técnico ativo do setor da Qualidade é escolhido: o usuário comum e o
-administrador lotados nela são recusados com 400.
+O formulário da Qualidade tem descrição e prioridade — sem título e sem
+categoria. A API completa o que falta: o título sai da descrição e a
+categoria fica nula. Até a API-13 o responsável era obrigatório; desde a
+API-14 o chamado nasce sem ele, e a equipe o distribui (ver
+`test_distribuicao_qualidade.py`). Este arquivo segue abrindo COM
+responsável, como o front 1.8.1 manda: o responsável enviado continua
+validado contra a regra de elegibilidade (ver `test_atendentes_qualidade.py`)
+— só o Técnico ativo do setor da Qualidade; o usuário comum e o administrador
+lotados nela são recusados com 400.
 
 A TI não muda em nada, e isso é o que mais se testa aqui: o corpo de TI passa
 pela mesma classe `ChamadoCreate` de antes, e os erros de validação dela são
@@ -393,25 +396,19 @@ class TestRecusasNaoGravamNada:
     def _campos_com_erro(self, resposta):
         return {(tuple(e["loc"]), e["type"]) for e in resposta.json()["detail"]}
 
-    def test_sem_responsavel_e_422(self, cliente, qualidade, autenticar, nada_gravado, webhook):
-        corpo = corpo_qualidade(qualidade)
-        del corpo["tecnico_responsavel_id"]
-
-        resposta = self._post(cliente, autenticar, qualidade, corpo)
-
-        assert resposta.status_code == 422
-        assert (("body", "tecnico_responsavel_id"), "missing") in self._campos_com_erro(resposta)
-        nada_gravado()
-        assert webhook == []
-
-    def test_responsavel_nulo_e_422(self, cliente, qualidade, autenticar, nada_gravado):
+    # Sem responsável, ou com `null`, deixou de ser recusa na API-14: o
+    # chamado nasce aguardando atribuição (`test_distribuicao_qualidade.py`).
+    # O que segue recusado é o responsável de tipo errado.
+    @pytest.mark.parametrize("valor", ["bruno", 1.5, [41]], ids=["texto", "fracao", "lista"])
+    def test_responsavel_de_tipo_errado_e_422(self, cliente, qualidade, autenticar, nada_gravado, webhook, valor):
         resposta = self._post(
-            cliente, autenticar, qualidade, corpo_qualidade(qualidade, tecnico_responsavel_id=None)
+            cliente, autenticar, qualidade, corpo_qualidade(qualidade, tecnico_responsavel_id=valor)
         )
 
         assert resposta.status_code == 422
         assert any(loc == ("body", "tecnico_responsavel_id") for loc, _ in self._campos_com_erro(resposta))
         nada_gravado()
+        assert webhook == []
 
     @pytest.mark.parametrize("descricao", [None, "", "   ", "curta demais"])
     def test_descricao_invalida_e_422(self, cliente, qualidade, autenticar, nada_gravado, descricao):
