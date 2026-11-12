@@ -45,6 +45,10 @@ class AtendenteInelegivel(Exception):
     """A conta existe, mas não pode atender a Qualidade."""
 
 
+class SemAtendentes(Exception):
+    """A Qualidade está configurada, mas ninguém é elegível para atender."""
+
+
 class ChamadoForaDaQualidade(Exception):
     """O chamado é de outro setor de destino."""
 
@@ -102,6 +106,16 @@ def listar_atendentes(db: Session) -> List[Usuario]:
     return [conta for conta in contas if eh_elegivel(conta, setor)]
 
 
+def exigir_atendentes(db: Session) -> None:
+    """
+    Para a abertura sem responsável (API-14): a Qualidade configurada e com
+    ao menos um atendente elegível. Sem ninguém, o chamado nasceria numa fila
+    que nenhuma conta da equipe vê.
+    """
+    if not listar_atendentes(db):
+        raise SemAtendentes()
+
+
 def buscar_atendente(db: Session, usuario_id: int) -> Usuario:
     """
     O responsável escolhido, validado.
@@ -132,6 +146,9 @@ def verificar_atendimento(db: Session, chamado: Chamado, usuario: Usuario) -> No
 
     A ordem decide a resposta: setor do chamado, configuração, elegibilidade
     de quem pede e, por último, a responsabilidade.
+
+    Chamado sem responsável (API-14) não é "de outra pessoa": passa por aqui,
+    e o endpoint o recusa depois da versão, com a mesma resposta do PUT.
     """
     if chamado.setor_destino != SETOR_DESTINO_QUALIDADE:
         raise ChamadoForaDaQualidade()
@@ -139,5 +156,5 @@ def verificar_atendimento(db: Session, chamado: Chamado, usuario: Usuario) -> No
     setor = setor_qualidade(db)
     if not eh_elegivel(usuario, setor):
         raise AtendenteInelegivel()
-    if chamado.tecnico_responsavel_id != usuario.id:
+    if chamado.tecnico_responsavel_id is not None and chamado.tecnico_responsavel_id != usuario.id:
         raise NaoEhResponsavel()

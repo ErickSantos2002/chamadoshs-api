@@ -321,9 +321,126 @@ class TestT4DuasReatribuicoes:
         assert b.status_code == 409 and b.json() == _desatualizada(v0 + 1)
         estado = _estado(sessao)
         assert (estado["tecnico_responsavel_id"], estado["versao"]) == (d["tecnico_da_qualidade_id"], v0 + 1)
-        # O PUT só registra histórico de status; reatribuição não escreve nenhum.
-        assert estado["historicos"] == []
+        # Só a reatribuição que valeu deixa histórico (API-14); a recusada, nenhum.
+        assert estado["historicos"] == [("Atribuição de responsável", None, None)]
         assert webhook == []
+
+
+class TestT4bDistribuicaoDoChamadoSemResponsavel:
+    """
+    API-14: o chamado nasce sem responsável e a equipe o distribui. "Assumir"
+    é uma atribuição como as outras: de duas com a mesma versão, uma vale.
+    """
+
+    @pytest.fixture
+    def na_fila(self, base, sessao):
+        return {**base, "v0": _gravar(sessao, tecnico_responsavel_id=None)}
+
+    def _beto(self, autenticar, d):
+        return autenticar(d["outro_tecnico_da_qualidade_id"], "beto.qualidade", "Tecnico")
+
+    def test_dois_assumem_ao_mesmo_tempo_e_so_o_primeiro_fica(
+        self, cliente, na_fila, sessao, autenticar, url_do_banco, pausa, webhook
+    ):
+        d, v0 = na_fila, na_fila["v0"]
+        a, b = _cena(
+            url_do_banco, pausa,
+            lambda: _put(
+                cliente, {"tecnico_responsavel_id": d["tecnico_da_qualidade_id"], "versao_esperada": v0},
+                _atendente(autenticar, d),
+            ),
+            lambda: _put(
+                cliente, {"tecnico_responsavel_id": d["outro_tecnico_da_qualidade_id"], "versao_esperada": v0},
+                self._beto(autenticar, d),
+            ),
+        )
+
+        assert _ok(a)["tecnico_responsavel_id"] == d["tecnico_da_qualidade_id"]
+        assert b.status_code == 409 and b.json() == _desatualizada(v0 + 1)
+        estado = _estado(sessao)
+        assert (estado["tecnico_responsavel_id"], estado["versao"]) == (d["tecnico_da_qualidade_id"], v0 + 1)
+        assert estado["historicos"] == [("Atribuição de responsável", None, None)]
+        autores = sessao.execute(
+            text("SELECT usuario_id, descricao FROM historico_chamados WHERE chamado_id = :id"), {"id": QUALIDADE}
+        ).all()
+        assert [tuple(linha) for linha in autores] == [
+            (d["tecnico_da_qualidade_id"], "Responsável definido: bruno.qualidade (antes: aguardando atribuição)")
+        ]
+        assert webhook == []
+
+    def test_largando_juntos_exatamente_um_assume(self, cliente, na_fila, sessao, autenticar):
+        """Sem pausa: quem vence é do acaso; quantos vencem, não."""
+        d, v0 = na_fila, na_fila["v0"]
+        largada = threading.Barrier(2, timeout=TEMPO_MAXIMO)
+        candidatos = {
+            d["tecnico_da_qualidade_id"]: _atendente(autenticar, d),
+            d["outro_tecnico_da_qualidade_id"]: self._beto(autenticar, d),
+        }
+
+        def assumir(usuario_id):
+            largada.wait()
+            return _put(cliente, {"tecnico_responsavel_id": usuario_id, "versao_esperada": v0}, candidatos[usuario_id])
+
+        esperas = {uid: em_paralelo(lambda uid=uid: assumir(uid)) for uid in candidatos}
+        respostas = {uid: esperar() for uid, esperar in esperas.items()}
+
+        assert sorted(r.status_code for r in respostas.values()) == [200, 409]
+        (vencedor,) = [uid for uid, r in respostas.items() if r.status_code == 200]
+        estado = _estado(sessao)
+        assert (estado["tecnico_responsavel_id"], estado["versao"]) == (vencedor, v0 + 1)
+        assert estado["historicos"] == [("Atribuição de responsável", None, None)]
+
+    def test_atribuicao_primeiro_o_inicio_com_a_versao_antiga_e_409(
+        self, cliente, na_fila, sessao, autenticar, url_do_banco, pausa
+    ):
+        d, v0 = na_fila, na_fila["v0"]
+        a, b = _cena(
+            url_do_banco, pausa,
+            lambda: _put(
+                cliente, {"tecnico_responsavel_id": d["outro_tecnico_da_qualidade_id"], "versao_esperada": v0},
+                _admin(autenticar, d),
+            ),
+            lambda: _put(cliente, {"status": "Em Andamento", "versao_esperada": v0}, _atendente(autenticar, d)),
+        )
+
+        _ok(a)
+        assert b.status_code == 409 and b.json() == _desatualizada(v0 + 1)
+        estado = _estado(sessao)
+        assert (estado["tecnico_responsavel_id"], estado["status"]) == (d["outro_tecnico_da_qualidade_id"], "Aberto")
+
+        # Com a versão nova, o colega atende o chamado já atribuído a outro.
+        _ok(_put(cliente, {"status": "Em Andamento", "versao_esperada": v0 + 1}, _atendente(autenticar, d)))
+        assert _estado(sessao)["historicos"] == [
+            ("Atribuição de responsável", None, None),
+            ("Alteração de status", "Aberto", "Em Andamento"),
+        ]
+
+    @pytest.mark.parametrize("rota", [_put, _atender], ids=["put", "atendimento"])
+    def test_inicio_recusado_solta_o_lock_e_nao_mexe_na_versao(
+        self, cliente, na_fila, sessao, autenticar, url_do_banco, pausa, rota
+    ):
+        # A começa o atendimento do chamado sem responsável e para com a linha
+        # travada; B, que atribui, espera. A é recusada (409 de estado, não de
+        # versão), o rollback solta o lock, e a atribuição de B vale com a
+        # mesma versão — a recusa não gravou nada.
+        d, v0 = na_fila, na_fila["v0"]
+        a, b = _cena(
+            url_do_banco, pausa,
+            lambda: rota(cliente, {"status": "Em Andamento", "versao_esperada": v0}, _atendente(autenticar, d)),
+            lambda: _put(
+                cliente, {"tecnico_responsavel_id": d["tecnico_da_qualidade_id"], "versao_esperada": v0},
+                _atendente(autenticar, d),
+            ),
+        )
+
+        assert a.status_code == 409
+        assert a.json() == {"detail": chamados_endpoint.AGUARDANDO_ATRIBUICAO}
+        assert _ok(b)["versao"] == v0 + 1
+        estado = _estado(sessao)
+        assert (estado["tecnico_responsavel_id"], estado["status"], estado["versao"]) == (
+            d["tecnico_da_qualidade_id"], "Aberto", v0 + 1,
+        )
+        assert estado["historicos"] == [("Atribuição de responsável", None, None)]
 
 
 class TestT5PutEsperaOLockDoPatch:
@@ -487,8 +604,9 @@ class TestReatribuicaoEAtendimento:
         assert b.status_code == 403
         assert b.json() == {"detail": "Só o responsável atual pode atender este chamado"}
         estado = _estado(sessao)
+        # O único histórico é o da reatribuição (API-14); o atendimento recusado não deixa nenhum.
         assert (estado["tecnico_responsavel_id"], estado["status"], estado["historicos"]) == (
-            d["outro_tecnico_da_qualidade_id"], "Aberto", [],
+            d["outro_tecnico_da_qualidade_id"], "Aberto", [("Atribuição de responsável", None, None)],
         )
 
     def test_atendimento_primeiro_a_reatribuicao_antiga_e_409(

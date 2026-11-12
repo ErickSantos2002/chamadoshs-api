@@ -55,7 +55,9 @@ from app.services.qualidade_service import (
     ChamadoForaDaQualidade,
     NaoEhResponsavel,
     QualidadeIndisponivel,
+    SemAtendentes,
     buscar_atendente,
+    exigir_atendentes,
     listar_atendentes,
     verificar_atendimento,
 )
@@ -155,24 +157,29 @@ def _validar_tecnico_responsavel(db: Session, chamado: Chamado, chamado_data: Ch
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=motivo)
 
 
-def _validar_responsavel_da_qualidade(db: Session, chamado: Chamado, chamado_data: ChamadoUpdate) -> None:
+def _validar_responsavel_da_qualidade(
+    db: Session, chamado: Chamado, chamado_data: ChamadoUpdate
+) -> Optional[Usuario]:
     """
-    Reatribuição de chamado da Qualidade: só entre atendentes elegíveis.
+    Atribuição e redistribuição de chamado da Qualidade: só a atendentes
+    elegíveis. Devolve o novo responsável quando há mudança, para o histórico;
+    `None` quando a requisição não o muda.
 
     Valida a MUDANÇA, não o campo. A edição completa do frontend reenvia o
     responsável atual em todo salvamento, e revalidá-lo deixaria ineditável o
     chamado cujo responsável saiu da Qualidade depois de atribuído — o mesmo
     motivo de `_validar_tecnico_responsavel` olhar só o que veio na requisição.
 
-    Desatribuir é recusado: chamado da Qualidade nasce com responsável, e sem
-    ele ninguém poderia atendê-lo pela rota de atendimento.
+    Desatribuir é recusado: o chamado pode nascer sem responsável (API-14),
+    mas o atribuído não volta à fila. O `null` reenviado no chamado que ainda
+    aguarda atribuição não é mudança, e passa.
     """
     if "tecnico_responsavel_id" not in chamado_data.model_fields_set:
-        return
+        return None
 
     novo_id = chamado_data.tecnico_responsavel_id
     if novo_id == chamado.tecnico_responsavel_id:
-        return
+        return None
 
     if novo_id is None:
         raise HTTPException(
@@ -181,7 +188,7 @@ def _validar_responsavel_da_qualidade(db: Session, chamado: Chamado, chamado_dat
         )
 
     try:
-        buscar_atendente(db, novo_id)
+        return buscar_atendente(db, novo_id)
     except QualidadeIndisponivel:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=QUALIDADE_INDISPONIVEL)
     except AtendenteNaoEncontrado:
@@ -191,6 +198,26 @@ def _validar_responsavel_da_qualidade(db: Session, chamado: Chamado, chamado_dat
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Atendente não é elegível para a Qualidade",
         )
+
+
+# Chamado da Qualidade sem responsável (API-14): a mesma recusa no PUT da
+# equipe e na rota de atendimento. 409, como as outras recusas de estado: o
+# corpo está certo, e atribuir o chamado torna a mesma requisição válida.
+AGUARDANDO_ATRIBUICAO = (
+    "Chamado aguardando atribuição: defina o responsável antes de iniciar o atendimento"
+)
+SEM_ATENDENTES = "Não há técnico da Qualidade disponível para receber chamados no momento"
+
+ACAO_ATRIBUICAO = "Atribuição de responsável"
+
+
+def _descrever_atribuicao(db: Session, anterior_id: Optional[int], novo: Usuario) -> str:
+    """O texto do histórico: de quem para quem. O autor vai na coluna própria."""
+    if anterior_id is None:
+        return f"Responsável definido: {novo.nome} (antes: aguardando atribuição)"
+    anterior = db.query(Usuario).filter(Usuario.id == anterior_id).first()
+    nome_anterior = anterior.nome if anterior is not None else f"usuário #{anterior_id}"
+    return f"Responsável alterado de {nome_anterior} para {novo.nome}"
 
 
 def _anexar_sla(chamados: List[Chamado], db: Session) -> List[Chamado]:
@@ -420,18 +447,28 @@ def criar_chamado(
     abrir em nome de outro, informando solicitante_id.
 
     TI: corpo `ChamadoCreate`, como sempre foi. Qualidade: corpo
-    `ChamadoCreateQualidade` — título gerado da descrição, sem categoria,
-    responsável obrigatório e elegível, e sem o webhook da TI.
+    `ChamadoCreateQualidade` — título gerado da descrição, sem categoria e
+    sem o webhook da TI. O chamado nasce sem responsável, aguardando a
+    atribuição pela equipe (API-14); o responsável no corpo continua aceito,
+    e validado como antes, para o cliente de antes dela. Sem nenhum técnico
+    elegível na Qualidade a abertura sem responsável é recusada (409): o
+    chamado ficaria numa fila que ninguém vê.
     """
     chamado_data = _validar_corpo_de_criacao(corpo)
     eh_qualidade = isinstance(chamado_data, ChamadoCreateQualidade)
 
     # Antes de qualquer gravação: recusa aqui não deixa chamado pela metade.
+    atendente = None
     if eh_qualidade:
         try:
-            atendente = buscar_atendente(db, chamado_data.tecnico_responsavel_id)
+            if chamado_data.tecnico_responsavel_id is None:
+                exigir_atendentes(db)
+            else:
+                atendente = buscar_atendente(db, chamado_data.tecnico_responsavel_id)
         except QualidadeIndisponivel:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=QUALIDADE_INDISPONIVEL)
+        except SemAtendentes:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=SEM_ATENDENTES)
         except AtendenteNaoEncontrado:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Atendente não encontrado")
         except AtendenteInelegivel:
@@ -460,10 +497,12 @@ def criar_chamado(
             descricao=chamado_data.descricao,
             prioridade=chamado_data.prioridade,
             setor_destino=SetorDestinoEnum.QUALIDADE.value,
-            tecnico_responsavel_id=atendente.id,
+            tecnico_responsavel_id=atendente.id if atendente is not None else None,
             status="Aberto"
         )
-        destino = f"Setor de destino: Qualidade | Responsável: {atendente.nome}"
+        destino = "Setor de destino: Qualidade | " + (
+            f"Responsável: {atendente.nome}" if atendente is not None else "Aguardando atribuição"
+        )
     else:
         # Na TI o responsável é definido depois, pela equipe: um
         # `tecnico_responsavel_id` no corpo é ignorado, como sempre foi.
@@ -557,14 +596,29 @@ def atualizar_chamado(
 
     # Depois do 404: chamado inexistente é 404, não 400 por causa do técnico.
     # Antes de qualquer `setattr`: recusa aqui não grava nenhum campo.
+    novo_responsavel = None
     if eh_qualidade:
-        _validar_responsavel_da_qualidade(db, chamado, chamado_data)
+        novo_responsavel = _validar_responsavel_da_qualidade(db, chamado, chamado_data)
     else:
         _validar_tecnico_responsavel(db, chamado, chamado_data)
 
     # Armazenar status anterior e técnico anterior para histórico e webhook
     status_anterior = chamado.status
     tecnico_anterior = chamado.tecnico_responsavel_id
+
+    # Qualidade (API-14): sem responsável o atendimento não começa. Vale para
+    # qualquer mudança de status, de qualquer perfil — o administrador também
+    # —, a não ser que a mesma requisição já atribua o chamado. Os outros
+    # campos seguem editáveis, e o status reenviado sem mudar não é atendimento.
+    # Antes de qualquer `setattr`, como as recusas do responsável.
+    if (
+        eh_qualidade
+        and tecnico_anterior is None
+        and novo_responsavel is None
+        and chamado_data.status
+        and chamado_data.status != status_anterior
+    ):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AGUARDANDO_ATRIBUICAO)
 
     # Atualizar campos. `versao_esperada` é pré-condição, não coluna.
     update_data = chamado_data.model_dump(exclude_unset=True, exclude={"versao_esperada"})
@@ -585,6 +639,17 @@ def atualizar_chamado(
         # falha antes dele desfaz os dois: não fica chamado alterado sem o
         # histórico de que o SLA depende, nem histórico de mudança que não houve.
         try:
+            # Atribuição e redistribuição da Qualidade (API-14): quem, de
+            # quem e para quem, no mesmo commit da troca. Só há
+            # `novo_responsavel` quando o responsável mudou de fato.
+            if novo_responsavel is not None:
+                adicionar_historico(
+                    db=db,
+                    chamado_id=chamado.id,
+                    usuario_id=current_user.id,
+                    acao=ACAO_ATRIBUICAO,
+                    descricao=_descrever_atribuicao(db, tecnico_anterior, novo_responsavel),
+                )
             if chamado_data.status and status_anterior != chamado_data.status:
                 adicionar_historico(
                     db=db,
@@ -740,8 +805,8 @@ def atender_chamado(
     `versao_esperada` é obrigatória (API-4b) e conferida na linha travada,
     depois da autorização. Ordem das recusas: 401/403 do token; 422 do corpo;
     404 (inexistente ou fora da leitura); 403/503 da autorização pelo
-    chamado; 428 sem versão; 409 de versão; 409 de cancelado/arquivado; 409
-    de transição.
+    chamado; 428 sem versão; 409 de versão; 409 do chamado sem responsável
+    (API-14, a mesma do PUT); 409 de cancelado/arquivado; 409 de transição.
 
     A leitura vem antes da autorização pelo chamado (API-6, D12): as recusas
     dela dizem o setor ("só chamados da Qualidade") e a quem o chamado está
@@ -773,6 +838,11 @@ def atender_chamado(
     # atende o chamado não tem por que sabê-la. Antes das recusas de estado:
     # com a versão velha, a pessoa decidiu sobre um estado que já mudou.
     conferir_versao(chamado, atendimento.versao_esperada, obrigatoria=True)
+
+    # Sem responsável (API-14): a mesma recusa do PUT da equipe, e no mesmo
+    # ponto — depois da versão, entre as recusas de estado.
+    if chamado.tecnico_responsavel_id is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=AGUARDANDO_ATRIBUICAO)
 
     # 409, como no /avaliar: o corpo está certo, o que impede é o estado.
     for marca in ("cancelado", "arquivado"):

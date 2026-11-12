@@ -743,7 +743,10 @@ class TestConcorrencia:
         chamado = _chamado(sessao, d["chamado_qualidade_id"])
         assert chamado.status == "Em Andamento"
         assert chamado.tecnico_responsavel_id == outro_tecnico
-        assert len(_historicos(sessao, d["chamado_qualidade_id"])) == 1
+        # O início do atendimento e, desde a API-14, a reatribuição.
+        assert [h.acao for h in _historicos(sessao, d["chamado_qualidade_id"])] == [
+            "Alteração de status", "Atribuição de responsável",
+        ]
 
         novo = _patch(
             cliente, d["chamado_qualidade_id"], {"status": "Aguardando"},

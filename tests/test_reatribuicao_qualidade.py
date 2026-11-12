@@ -123,11 +123,12 @@ class TestNovoResponsavel:
         assert resposta.status_code == 200
         assert webhook == []
 
-    def test_nao_registra_historico_de_reatribuicao(
+    def test_registra_historico_de_reatribuicao(
         self, cliente, chamado_qualidade, sessao, autenticar, webhook
     ):
-        # P-8: o PUT não registra reatribuição em nenhum setor, e o API-3 não
-        # muda isso.
+        # Até a API-13 o PUT não registrava reatribuição em nenhum setor
+        # (P-8). Desde a API-14 a da Qualidade fica no histórico, com autor,
+        # responsável anterior e novo; a da TI segue sem (`TestTiInalterada`).
         d = chamado_qualidade
         antes = _historicos(sessao, d["chamado_qualidade_id"])
 
@@ -137,7 +138,18 @@ class TestNovoResponsavel:
             _tecnico_da_qualidade(autenticar, d),
         )
 
-        assert _historicos(sessao, d["chamado_qualidade_id"]) == antes
+        assert _historicos(sessao, d["chamado_qualidade_id"]) == antes + 1
+        historico = (
+            sessao.query(HistoricoChamado)
+            .filter(HistoricoChamado.chamado_id == d["chamado_qualidade_id"])
+            .one()
+        )
+        assert (historico.acao, historico.usuario_id, historico.descricao) == (
+            "Atribuição de responsável",
+            d["tecnico_da_qualidade_id"],
+            "Responsável alterado de ana.qualidade para bruno.qualidade",
+        )
+        assert (historico.status_anterior, historico.status_novo) == (None, None)
 
 
 class TestResponsavelRecusado:
@@ -380,6 +392,15 @@ class TestTiInalterada:
         assert resposta.status_code == 200
         assert _chamado(sessao, dados["chamado_id"]).tecnico_responsavel_id is None
         assert webhook == []
+
+    def test_atribuicao_na_ti_segue_sem_historico(self, cliente, dados, sessao, autenticar, webhook):
+        # O histórico de atribuição da API-14 é só da Qualidade.
+        resposta = _put(
+            cliente, dados["chamado_id"], {"tecnico_responsavel_id": dados["tecnico_id"]}, _tecnico(autenticar, dados)
+        )
+
+        assert resposta.status_code == 200
+        assert _historicos(sessao, dados["chamado_id"]) == 0
 
     def test_atendente_da_qualidade_nao_e_atribuivel_na_ti(
         self, cliente, chamado_qualidade, sessao, autenticar, webhook
