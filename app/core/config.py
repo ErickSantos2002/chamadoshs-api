@@ -150,6 +150,18 @@ class Settings(BaseSettings):
     WEBHOOK_TECNICO_TOKEN: str = ""
     WEBHOOK_TECNICO_HEADER: str = "X-Webhook-Token"
 
+    # Webhook de notificação da Qualidade (n8n) — API-15. Fluxo separado do
+    # da TI: outra URL, outro segredo, outro workflow. Nada aqui muda o
+    # webhook de cima.
+    #
+    # URL vazia desliga o envio (padrão). Com a URL, o token é OBRIGATÓRIO:
+    # sem ele nada é enviado, e o motivo vai para o log. O fluxo nasce com
+    # Header Auth, então não há a janela de compatibilidade que justifica o
+    # token opcional da TI.
+    WEBHOOK_QUALIDADE_URL: str = ""
+    WEBHOOK_QUALIDADE_TOKEN: str = ""
+    WEBHOOK_QUALIDADE_HEADER: str = "X-Webhook-Token"
+
     # Setor que atende os chamados de destino QUALIDADE (id em `setores`).
     #
     # Por ambiente, e nunca fixo no código: o id da Qualidade em produção não é
