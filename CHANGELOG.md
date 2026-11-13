@@ -12,6 +12,49 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Adicionado — notificação da Qualidade por fluxo próprio (API-15)
+- **Os técnicos da Qualidade passam a poder ser avisados por WhatsApp**, por
+  um webhook separado do da TI (`WEBHOOK_QUALIDADE_URL`,
+  `WEBHOOK_QUALIDADE_TOKEN`, `WEBHOOK_QUALIDADE_HEADER`). **Desligado por
+  padrão**: sem a URL nada é enviado, e a API se comporta como a API-14.
+- **Chamado aberto sem responsável** gera `chamado_aberto` para os técnicos
+  elegíveis da Qualidade — a lista de `GET /chamados/atendentes-qualidade` —,
+  menos quem abriu. Aberto já com responsável (o corpo do cliente antigo),
+  gera `responsavel_atribuido` só para ele.
+- **Atribuição e redistribuição** geram `responsavel_atribuido` só para o
+  novo responsável, e só quando outra pessoa fez a troca: **assumir não
+  avisa ninguém**. Status, comentário, cancelamento e arquivamento não
+  avisam.
+- **O corpo leva só ids e o protocolo.** Sem título, descrição, nome,
+  solicitante ou telefone: os contatos ficam no n8n, por id de usuário. Cada
+  evento tem um `id_evento` estável (`<chamado>:<versão>:<evento>`), que o
+  fluxo usa para não avisar duas vezes.
+- **Depois do commit, fora da requisição e sem repetição.** Falha, timeout
+  ou resposta inválida do n8n não desfazem a abertura nem a atribuição e não
+  atrasam a resposta; a falha vai para o log com o `id_evento`, sem URL nem
+  token. Não repetir é proposital: um POST recebido cuja resposta se perdeu,
+  repetido, viraria mensagem duplicada. Não há garantia de entrega
+  exatamente uma vez — ver `docs/notificacao-qualidade.md`.
+- **Com a URL, o token é obrigatório**: URL configurada sem token não envia
+  e registra erro. (O token do webhook da TI segue opcional.)
+- **A TI não muda**: mesmo webhook, mesmo corpo, mesmos momentos. O fluxo da
+  Qualidade nunca usa a URL nem o token da TI, e chamado da TI nunca gera
+  evento da Qualidade.
+- Sem migration e sem mudança no frontend.
+
+#### Ação necessária no deploy
+- Nenhuma para subir: com as variáveis vazias nada muda.
+- Para ligar: publicar o fluxo `[CHAMADOSHS] Notificação Qualidade` no n8n
+  (com Header Auth e as tabelas de contatos e de envios), preencher
+  `WEBHOOK_QUALIDADE_URL` e `WEBHOOK_QUALIDADE_TOKEN` no painel e reiniciar a
+  API. Para desligar: esvaziar a URL e reiniciar.
+
+#### Testes
+- `tests/test_notificacao_qualidade.py`: abertura com e sem responsável,
+  assumir, atribuição manual, redistribuição, autor fora dos destinatários,
+  nenhum técnico elegível, URL vazia, token ausente, falha/timeout/resposta
+  inválida do n8n, um envio por escrita e regressão do webhook da TI.
+
 ### Mudado — distribuição interna dos chamados da Qualidade (API-14)
 - **O chamado da Qualidade nasce sem responsável.** Quem abre não escolhe
   mais quem atende: `tecnico_responsavel_id` passou a ser opcional em

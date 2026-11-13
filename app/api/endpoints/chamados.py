@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
@@ -64,7 +64,14 @@ from app.services.qualidade_service import (
 from app.services.responsavel_ti_service import CONTA_DE_SERVICO, listar_responsaveis, motivo_de_recusa
 from app.services.sla_service import calcular_sla
 from app.services.versao_service import conferir_versao
-from app.services.webhook_service import enviar_webhook_tecnico
+from app.services.webhook_service import (
+    EVENTO_CHAMADO_ABERTO,
+    EVENTO_RESPONSAVEL_ATRIBUIDO,
+    enviar_webhook_qualidade,
+    enviar_webhook_tecnico,
+    montar_evento_qualidade,
+    webhook_qualidade_ligado,
+)
 from app.utils.timezone import agora_brasilia
 
 router = APIRouter()
@@ -218,6 +225,56 @@ def _descrever_atribuicao(db: Session, anterior_id: Optional[int], novo: Usuario
     anterior = db.query(Usuario).filter(Usuario.id == anterior_id).first()
     nome_anterior = anterior.nome if anterior is not None else f"usuário #{anterior_id}"
     return f"Responsável alterado de {nome_anterior} para {novo.nome}"
+
+
+def _notificar_qualidade(
+    background_tasks: BackgroundTasks,
+    db: Session,
+    evento: str,
+    chamado: Chamado,
+    autor_id: int,
+    responsavel_id: Optional[int] = None,
+    responsavel_anterior_id: Optional[int] = None,
+) -> None:
+    """
+    Agenda o aviso de um evento da Qualidade (API-15). Chamar DEPOIS do commit.
+
+    Abertura sem responsável avisa os técnicos elegíveis da Qualidade — a
+    mesma lista que pode receber o chamado; atribuição avisa o novo
+    responsável. O autor da ação fica de fora nos dois (ver
+    `montar_evento_qualidade`), então assumir o próprio chamado não avisa
+    ninguém.
+
+    O envio sai como tarefa de fundo, depois da resposta: n8n lento não
+    segura quem abriu o chamado. Nada aqui pode quebrar a escrita, que já
+    está gravada — qualquer falha ao montar o evento vira log, e a resposta
+    segue.
+    """
+    if not webhook_qualidade_ligado():
+        return
+
+    try:
+        if evento == EVENTO_CHAMADO_ABERTO:
+            destinatarios = [atendente.id for atendente in listar_atendentes(db)]
+        else:
+            destinatarios = [responsavel_id]
+
+        payload = montar_evento_qualidade(
+            evento=evento,
+            chamado_id=chamado.id,
+            protocolo=chamado.protocolo,
+            versao=chamado.versao,
+            autor_id=autor_id,
+            destinatarios_ids=destinatarios,
+            responsavel_id=responsavel_id,
+            responsavel_anterior_id=responsavel_anterior_id,
+        )
+    except Exception as e:
+        logger.error("Falha ao preparar a notificação da Qualidade (%s): %s", evento, type(e).__name__)
+        return
+
+    if payload is not None:
+        background_tasks.add_task(enviar_webhook_qualidade, payload)
 
 
 def _anexar_sla(chamados: List[Chamado], db: Session) -> List[Chamado]:
@@ -435,6 +492,7 @@ CORPO_DE_CRIACAO_OPENAPI = {
     openapi_extra=CORPO_DE_CRIACAO_OPENAPI,
 )
 def criar_chamado(
+    background_tasks: BackgroundTasks,
     corpo: Any = Body(...),
     current_user: Usuario = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -453,6 +511,11 @@ def criar_chamado(
     e validado como antes, para o cliente de antes dela. Sem nenhum técnico
     elegível na Qualidade a abertura sem responsável é recusada (409): o
     chamado ficaria numa fila que ninguém vê.
+
+    Aviso da Qualidade (API-15), se `WEBHOOK_QUALIDADE_URL` estiver
+    configurada: sem responsável, `chamado_aberto` para os técnicos elegíveis;
+    já com responsável, `responsavel_atribuido` só para ele. Quem abriu nunca
+    é avisado. Depois do commit, fora da requisição.
     """
     chamado_data = _validar_corpo_de_criacao(corpo)
     eh_qualidade = isinstance(chamado_data, ChamadoCreateQualidade)
@@ -543,6 +606,18 @@ def criar_chamado(
             tecnico_id=None,
             acao="criado"
         )
+    else:
+        # Fluxo próprio da Qualidade (API-15). Nasceu com responsável (o
+        # corpo do cliente antigo): não está "aguardando atribuição", então
+        # o aviso é o de atribuição, só para ele.
+        _notificar_qualidade(
+            background_tasks,
+            db,
+            evento=EVENTO_CHAMADO_ABERTO if atendente is None else EVENTO_RESPONSAVEL_ATRIBUIDO,
+            chamado=chamado,
+            autor_id=current_user.id,
+            responsavel_id=atendente.id if atendente is not None else None,
+        )
 
     return _anexar_sla([chamado], db)[0]
 
@@ -551,6 +626,7 @@ def criar_chamado(
 def atualizar_chamado(
     chamado_id: int,
     chamado_data: ChamadoUpdate,
+    background_tasks: BackgroundTasks,
     usuario_id: Optional[int] = USUARIO_ID_DEPRECIADO,
     current_user: Usuario = Depends(require_staff),
     db: Session = Depends(get_db),
@@ -561,7 +637,9 @@ def atualizar_chamado(
     Chamado da Qualidade (API-4b): a linha é travada e relida antes de
     qualquer conferência, `versao_esperada` é obrigatória (428) e tem de bater
     com a versão travada (409), e chamado e histórico saem num commit só. Sem
-    webhook, como sempre.
+    o webhook da TI, como sempre; a troca de responsável avisa o novo
+    responsável pelo fluxo da Qualidade (API-15), a não ser que ele mesmo a
+    tenha feito — assumir não avisa ninguém.
 
     TI: `versao_esperada` é opcional. Se vier (API-12), o caminho é o da
     Qualidade — trava, relê, confere e grava chamado e histórico num commit
@@ -666,6 +744,18 @@ def atualizar_chamado(
             raise
         db.refresh(chamado)
         if eh_qualidade:
+            # Só quando o responsável mudou de fato (`novo_responsavel`), e
+            # depois do commit: a escrita recusada não chega aqui.
+            if novo_responsavel is not None:
+                _notificar_qualidade(
+                    background_tasks,
+                    db,
+                    evento=EVENTO_RESPONSAVEL_ATRIBUIDO,
+                    chamado=chamado,
+                    autor_id=current_user.id,
+                    responsavel_id=novo_responsavel.id,
+                    responsavel_anterior_id=tecnico_anterior,
+                )
             return _anexar_sla([chamado], db)[0]
     else:
         db.commit()
