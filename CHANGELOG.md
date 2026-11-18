@@ -12,6 +12,26 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Alterado — título digitado na abertura da Qualidade (API-16)
+- **`POST /chamados/` com `setor_destino: QUALIDADE` passa a aceitar
+  `titulo`.** Enviado, é o que fica gravado: 10 a 200 caracteres, sem os
+  espaços das pontas — o mínimo e o aparo da TI. Antes o campo era recusado
+  com 422 (`nao_se_aplica`).
+- **Sem `titulo`, nada muda:** o título continua gerado da descrição (até 80
+  caracteres). É o corpo do front até a 1.9.0, que segue funcionando.
+- **`titulo: null` continua recusado (422, `titulo_nulo`).** Quem quer o
+  título gerado omite o campo; aceitar `null` como ausência esconderia um
+  cliente que perdeu o valor.
+- `categoria_id` segue recusado na Qualidade. A TI não muda: título
+  obrigatório, mínimo de 10, sem teto na API.
+- Permissões, regra do solicitante, distribuição e notificações não mudam; o
+  aviso da Qualidade continua sem título no corpo.
+
+#### Ação necessária no deploy
+- Sem migration e sem variável nova. **Subir antes do front 1.10.0**, que
+  manda o título. Rollback desta versão com o front 1.10.0 no ar faz toda
+  abertura para a Qualidade responder 422: voltar o front primeiro.
+
 ### Adicionado — notificação da Qualidade por fluxo próprio (API-15)
 - **Os técnicos da Qualidade passam a poder ser avisados por WhatsApp**, por
   um webhook separado do da TI (`WEBHOOK_QUALIDADE_URL`,

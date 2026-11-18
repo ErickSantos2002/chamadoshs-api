@@ -146,8 +146,8 @@ class TestQualidadeNuncaViraTI:
     Substitui o bloqueio temporário da primeira etapa. A garantia que ele
     protegia continua: um corpo com QUALIDADE nunca vira chamado de TI. O que
     mudou é que agora ele é avaliado pelas regras da Qualidade, e o corpo de TI
-    abaixo (com título e categoria) é recusado por elas — as regras completas
-    estão em `test_criacao_qualidade.py`.
+    abaixo é recusado por elas, pela categoria — o título passou a ser aceito
+    na API-16. As regras completas estão em `test_criacao_qualidade.py`.
     """
 
     @pytest.mark.parametrize("perfil", ["comum", "tecnico"])
@@ -168,10 +168,7 @@ class TestQualidadeNuncaViraTI:
         )
 
         assert resposta.status_code == 422
-        assert {tuple(e["loc"]) for e in resposta.json()["detail"]} == {
-            ("body", "titulo"),
-            ("body", "categoria_id"),
-        }
+        assert {tuple(e["loc"]) for e in resposta.json()["detail"]} == {("body", "categoria_id")}
         assert sessao.query(Chamado).count() == antes
 
     def test_qualidade_sem_configuracao_nao_cai_em_ti(self, cliente, dados, sessao, autenticar):

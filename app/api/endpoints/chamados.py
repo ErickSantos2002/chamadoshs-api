@@ -505,9 +505,9 @@ def criar_chamado(
     abrir em nome de outro, informando solicitante_id.
 
     TI: corpo `ChamadoCreate`, como sempre foi. Qualidade: corpo
-    `ChamadoCreateQualidade` — título gerado da descrição, sem categoria e
-    sem o webhook da TI. O chamado nasce sem responsável, aguardando a
-    atribuição pela equipe (API-14); o responsável no corpo continua aceito,
+    `ChamadoCreateQualidade` — título opcional (API-16; sem ele, gerado da
+    descrição), sem categoria e sem o webhook da TI. O chamado nasce sem
+    responsável, aguardando a atribuição pela equipe (API-14); o responsável no corpo continua aceito,
     e validado como antes, para o cliente de antes dela. Sem nenhum técnico
     elegível na Qualidade a abertura sem responsável é recusada (409): o
     chamado ficaria numa fila que ninguém vê.
@@ -556,7 +556,12 @@ def criar_chamado(
             protocolo=protocolo,
             solicitante_id=solicitante_id,
             categoria_id=None,
-            titulo=derivar_titulo(chamado_data.descricao),
+            # API-16: o título digitado vale; sem ele, o gerado da descrição.
+            titulo=(
+                chamado_data.titulo
+                if chamado_data.titulo is not None
+                else derivar_titulo(chamado_data.descricao)
+            ),
             descricao=chamado_data.descricao,
             prioridade=chamado_data.prioridade,
             setor_destino=SetorDestinoEnum.QUALIDADE.value,
