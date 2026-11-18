@@ -23,6 +23,15 @@ destinatário sem mudança na API; falta só o contato dele no n8n.
 
 Quem faz a ação nunca é avisado dela. Sem destinatário, nada é enviado.
 
+Quem decide os destinatários é a API, a cada evento. O workflow do n8n não
+tem lista fixa de pessoas e não decide quem pode atender chamado: ele recebe
+os ids, procura o contato de cada um e envia. Técnico elegível sem contato
+ativo na tabela do n8n não recebe mensagem, e o aviso dele fica registrado
+como `sem_contato`.
+
+Contatos cadastrados em 18/11/2026: Hyago e Gustavo. Os telefones ficam só
+na tabela do n8n.
+
 ## Configuração
 
 | Variável | Padrão | Efeito |
@@ -75,12 +84,15 @@ URL e token valem como credencial: só no painel do ambiente.
 A chave de um aviso é `<id_evento>:<destinatario_id>`. O workflow mantém uma
 tabela de envios com essa chave e um estado:
 
-| Estado | Significado | Reenvio automático |
+| Estado | Quando é gravado | Reenvio automático |
 |---|---|---|
-| `pendente` | registrado, envio não concluído (ou a execução morreu no meio) | não |
-| `enviado` | a Evolution API confirmou | não |
+| `pendente` | ao registrar a chave, antes de procurar o contato; permanece assim se a execução morrer no meio | não |
+| `enviado` | a Evolution API aceitou a mensagem | não |
 | `incerto` | o envio falhou ou a resposta se perdeu | não |
-| `sem_contato` | destinatário sem contato ativo na tabela | não |
+| `sem_contato` | o destinatário não tem contato ativo na tabela | não |
+
+`enviado` registra que a Evolution API aceitou a mensagem, não que o
+WhatsApp a entregou ao aparelho.
 
 A chave é registrada como `pendente` **antes** do envio, e chave já
 registrada, em qualquer estado, não é enviada de novo. Reentregar o mesmo
@@ -93,10 +105,12 @@ evento (reexecução manual, por exemplo) só alcança quem ainda não tem chave
   desenho prefere **um aviso a menos a um aviso em dobro**.
 - Se o POST da API não chega ao n8n, o evento não existe para o workflow. A
   API registra a falha e não repete.
-- A tabela do n8n não tem restrição de unicidade: duas execuções simultâneas
-  do **mesmo** evento podem as duas passar pela conferência. A API não gera
-  esse caso (um POST por escrita, sem repetição); ele só existe em reenvio
-  manual simultâneo.
+- A tabela do n8n não impõe unicidade à chave e não há exclusão mútua entre
+  execuções: duas execuções simultâneas do **mesmo** evento podem as duas
+  passar pela conferência e enviar a mensagem em dobro. A API não gera esse
+  caso (um POST por escrita, sem repetição); ele só existe em reenvio manual
+  simultâneo. A deduplicação foi homologada apenas em sequência; o risco da
+  concorrência foi aceito provisoriamente para a implantação atual.
 
 Recuperar um aviso `incerto` ou `pendente` é decisão humana: conferir com o
 técnico, e só então apagar a linha da chave e reentregar o evento.
@@ -118,9 +132,16 @@ técnico, e só então apagar a linha da chave e reentregar o evento.
 
 Tabelas (Data Tables do n8n, no projeto de quem administra o fluxo):
 
-- `chamadoshs_qualidade_contatos`: `usuario_id`, `telefone`, `ativo`.
-- `chamadoshs_qualidade_envios`: `chave`, `id_evento`, `evento`,
-  `usuario_id`, `status`, `detalhe`.
+- `chamadoshs_qualidade_contatos`: `usuario_id` (número), `telefone`
+  (texto), `ativo` (booleano). O telefone vai só com dígitos, com o código
+  do país.
+- `chamadoshs_qualidade_envios`: `chave`, `id_evento`, `estado`,
+  `protocolo`, `detalhe_erro` (texto) e `usuario_id` (número). `estado`
+  guarda um dos quatro estados acima; `detalhe_erro` só é preenchido no
+  `incerto`.
+
+As duas têm ainda as colunas que o n8n cria sozinho (identificador e datas
+de criação e de atualização da linha).
 
 Mensagens:
 
@@ -129,12 +150,96 @@ Mensagens:
 - Atribuição: `Um chamado da Qualidade foi atribuído a você: {protocolo}.
   Acesse o ChamadosHS para visualizar.`
 
-## Ativação e rollback
+## Homologação (13 a 17/11/2026)
 
-1. n8n: criar as tabelas, a credencial Header Auth e o workflow; publicar.
-2. API: subir a imagem com as variáveis vazias — nada muda.
-3. Painel: preencher `WEBHOOK_QUALIDADE_URL` e `WEBHOOK_QUALIDADE_TOKEN` e
-   reiniciar a API.
+Feita no n8n pela URL de teste do Webhook, com eventos fictícios e o
+workflow não publicado. Os números são os das execuções do n8n.
 
-Rollback: esvaziar `WEBHOOK_QUALIDADE_URL` e reiniciar, ou despublicar o
-workflow (a API registra o 404 e segue). Nenhum dos dois toca a TI.
+| Cenário | Execuções | Resultado |
+|---|---|---|
+| Webhook autenticado por Header Auth | — | aprovado: validado nas execuções de teste que percorreram o Webhook autenticado |
+| Destinatário sem contato (`sem_contato`) | 115712, 115779 | aprovado |
+| Falha de envio (`incerto`, sem reenvio) | 115720 | aprovado |
+| Evento repetido em sequência (deduplicação) | 115781, 115782 | aprovado: pararam em "Já registrado?", sem linha nova e sem mensagem |
+| Envio real a um técnico (`enviado`) | 115783 | aprovado: recebimento confirmado pelo Hyago em 17/11/2026 |
+| — | 115780 | inconclusiva: só o nó Webhook rodou; sem efeito na tabela nem mensagem |
+
+O que **não** foi homologado:
+
+- envio individual ao Gustavo;
+- envio aos dois técnicos no mesmo evento;
+- eventos simultâneos com a mesma chave (concorrência);
+- o POST real da API na URL de produção do Webhook.
+
+As execuções de teste foram apagadas depois. As quatro linhas que elas
+gravaram em `chamadoshs_qualidade_envios` foram mantidas.
+
+## Segurança e retenção
+
+Configuração do workflow da Qualidade, aplicada em 17/11/2026:
+
+| Opção | Valor |
+|---|---|
+| Save failed production executions | Save |
+| Save successful production executions | Do not save |
+| Save manual executions | Do not save |
+| Available in MCP | desativado |
+
+Execução com sucesso não deixa registro no n8n: o que se sabe de um aviso
+entregue está na tabela de envios. Teste manual também não fica salvo.
+
+Riscos em aberto:
+
+- A retenção global de execuções do n8n (prazo e limite da limpeza
+  automática) ainda não foi verificada.
+- Execução com falha fica salva e pode guardar o cabeçalho com o token e o
+  telefone do destinatário, até ser apagada.
+- A instalação atual não tem o recurso de ocultar dados de execução
+  (Redact).
+- A instância tem uma única conta, Owner, aparentemente compartilhada: quem
+  entra com ela vê execuções e altera credenciais, sem trilha de autoria.
+- O MCP da instância está habilitado para outros workflows.
+
+Estas configurações reduzem a exposição; não a eliminam.
+
+### Rotação do token
+
+1. Gerar um segredo criptograficamente aleatório (32 bytes ou mais).
+2. Guardá-lo em gerenciador de senhas.
+3. Atualizar o valor na credencial Header Auth que o Webhook já usa, sem
+   criar outra.
+4. Pôr o mesmo valor em `WEBHOOK_QUALIDADE_TOKEN` e reiniciar a API.
+5. Não registrar o segredo em Git, Markdown, logs ou conversas.
+
+Numa rotação com a integração ativa, entre os passos 3 e 4 os dois lados
+têm segredos diferentes: o n8n recusa os envios da API, e um aviso gerado
+nesse intervalo pode falhar, sem nova tentativa. Fazer os dois passos em
+seguida. Na ativação inicial isso não ocorre: a API ainda não envia nada,
+e não há notificação da Qualidade a interromper.
+
+Rotacionar sempre que o token puder ter sido exposto, por exemplo numa
+execução com falha vista por terceiros.
+
+## Ativação
+
+A API já está publicada com as variáveis vazias, e as tabelas, a credencial
+e o workflow já existem no n8n. Falta, cada passo com autorização própria:
+
+1. Concluir as verificações de segurança pendentes (acima).
+2. Confirmar a URL de produção do Webhook (não a de teste).
+3. Publicar o workflow da Qualidade.
+4. Preencher `WEBHOOK_QUALIDADE_URL` e `WEBHOOK_QUALIDADE_TOKEN` no painel
+   da API.
+5. Reiniciar a API, para ela ler as variáveis.
+6. Conferir o `/health` e, no log do primeiro envio, que o webhook foi
+   entregue e não recusado (recusa indica token diferente do n8n).
+7. Acompanhar o primeiro chamado legítimo da Qualidade.
+8. Confirmar com os técnicos que a mensagem chegou a quem a regra indica.
+
+## Rollback
+
+- Esvaziar `WEBHOOK_QUALIDADE_URL` e reiniciar a API: ela para de enviar.
+- Ou despublicar o workflow: a API registra o 404 e segue.
+
+Nenhum dos dois toca a integração da TI. Mensagem já enviada não é
+desfeita, e as linhas da tabela de envios não são apagadas pelo rollback.
