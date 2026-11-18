@@ -18,6 +18,15 @@ from app.schemas.sla import SLAInfo
 TituloChamado = Annotated[str, StringConstraints(strip_whitespace=True, min_length=10)]
 DescricaoChamado = Annotated[str, StringConstraints(strip_whitespace=True, min_length=20)]
 
+# Título digitado na abertura da Qualidade (API-16): o mínimo e o aparo são os
+# da TI. O teto é o do campo do formulário — a TI não tem teto aqui, e ganhar
+# um mudaria os erros que o frontend dela já recebe.
+TITULO_QUALIDADE_MAXIMO = 200
+TituloQualidade = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=10, max_length=TITULO_QUALIDADE_MAXIMO),
+]
+
 # `solucao` guarda duas coisas: o texto da solução e o motivo do cancelamento
 # — o `PATCH /cancelar` não tem corpo, então o motivo chega por `PUT {solucao}`
 # e cai na mesma coluna. O mínimo aqui vale para os dois, e é isso que se
@@ -123,6 +132,19 @@ def _documentar_proibido(schema: dict) -> None:
         schema["description"] = descricao
 
 
+def _documentar_titulo_opcional(schema: dict) -> None:
+    """
+    No OpenAPI, o título da Qualidade é texto ou não vem: `null` não é uma
+    das alternativas, como na validação real. Sem isto o `Optional` do tipo
+    documentaria `null` como aceito.
+    """
+    descricao = schema.get("description")
+    schema.clear()
+    schema.update(type="string", minLength=10, maxLength=TITULO_QUALIDADE_MAXIMO)
+    if descricao:
+        schema["description"] = descricao
+
+
 class ChamadoCreate(ChamadoBase):
     """
     Chamado novo para a TI: aqui o mínimo vale, porque não há legado para
@@ -168,24 +190,33 @@ class ChamadoCreateQualidade(BaseModel):
     """
     Chamado novo para a Qualidade.
 
-    O formulário da Qualidade não tem título nem categoria: o título é gerado
-    da descrição e a categoria fica nula. O responsável é opcional (API-14):
-    sem ele, ou com `null`, o chamado nasce aguardando atribuição, e a equipe
-    da Qualidade o distribui. Se vier — o cliente de antes da API-14 —, passa
-    pela regra de elegibilidade no endpoint (`qualidade_service`), como antes.
+    A Qualidade não usa categoria, que fica nula. O responsável é opcional
+    (API-14): sem ele, ou com `null`, o chamado nasce aguardando atribuição, e
+    a equipe da Qualidade o distribui. Se vier — o cliente de antes da
+    API-14 —, passa pela regra de elegibilidade no endpoint
+    (`qualidade_service`), como antes.
 
-    `titulo` e `categoria_id` estão declarados só para serem recusados. É a
-    presença que conta, não o valor — até `null` é recusado: receber esses
-    campos indica um cliente montando o corpo errado, e ignorá-los em silêncio
-    esconderia o defeito. O validador só roda quando o campo vem na
+    O título é opcional (API-16). Enviado, vale o que foi digitado, com o
+    mínimo e o aparo da TI e teto de 200. Ausente, é gerado da descrição, como
+    sempre foi — é o que o cliente de antes da API-16 manda. `null` é
+    recusado: quem quer o título gerado omite o campo, e tratar `null` como
+    ausência esconderia um cliente que perdeu o valor no caminho.
+
+    `categoria_id` está declarado só para ser recusado. É a presença que
+    conta, não o valor — até `null` é recusado: receber o campo indica um
+    cliente montando o corpo errado, e ignorá-lo em silêncio esconderia o
+    defeito. Os validadores `before` só rodam quando o campo vem na
     requisição, porque o padrão não é validado.
     """
 
     setor_destino: Literal[SetorDestinoEnum.QUALIDADE]
-    titulo: Optional[Any] = Field(
+    titulo: Optional[TituloQualidade] = Field(
         None,
-        description="Não enviar, nem como null (422): gerado da descrição.",
-        json_schema_extra=_documentar_proibido,
+        description=(
+            "Opcional: 10 a 200 caracteres, sem contar espaços nas pontas. "
+            "Omitido, o título é gerado da descrição. Não enviar como null (422)."
+        ),
+        json_schema_extra=_documentar_titulo_opcional,
     )
     descricao: DescricaoChamado
     categoria_id: Optional[Any] = Field(
@@ -203,7 +234,17 @@ class ChamadoCreateQualidade(BaseModel):
         ),
     )
 
-    @field_validator("titulo", "categoria_id", mode="before")
+    @field_validator("titulo", mode="before")
+    @classmethod
+    def _titulo_nao_e_nulo(cls, valor):
+        if valor is None:
+            raise PydanticCustomError(
+                "titulo_nulo",
+                "Omita o título para que ele seja gerado da descrição; null não é aceito",
+            )
+        return valor
+
+    @field_validator("categoria_id", mode="before")
     @classmethod
     def _nao_se_aplica(cls, valor):
         raise PydanticCustomError("nao_se_aplica", "Não se aplica a chamados da Qualidade")

@@ -15,10 +15,14 @@ A TI não muda em nada, e isso é o que mais se testa aqui: o corpo de TI passa
 pela mesma classe `ChamadoCreate` de antes, e os erros de validação dela são
 conferidos campo a campo contra o que a API devolvia antes desta entrega.
 
-Título e categoria ENVIADOS para a Qualidade são recusados, mesmo nulos. É a
-presença do campo que conta, não o valor: o formulário da Qualidade não tem
-esses campos, então recebê-los indica um cliente montando o corpo errado — e
-aceitar em silêncio esconderia o defeito.
+Categoria ENVIADA para a Qualidade é recusada, mesmo nula. É a presença do
+campo que conta, não o valor: o formulário da Qualidade não tem esse campo,
+então recebê-lo indica um cliente montando o corpo errado — e aceitar em
+silêncio esconderia o defeito.
+
+O título é opcional desde a API-16 (`TestTituloDaQualidade`): digitado, vale;
+ausente, sai da descrição, como o cliente de antes dela espera; `null` segue
+recusado.
 """
 
 import pytest
@@ -346,6 +350,120 @@ class TestCriacaoDaQualidade:
         assert resposta.json()["tecnico_responsavel_id"] == qualidade["tecnico_da_qualidade_id"]
 
 
+class TestTituloDaQualidade:
+    """
+    API-16: o título da Qualidade é opcional. Digitado, é o que fica gravado;
+    ausente, sai da descrição — o corpo do cliente de antes da API-16.
+    """
+
+    TITULO = "Balança da linha 3 descalibrada"
+    DESCRICAO = "Leitura 2% acima no peso padrão.\nAconteceu depois da manutenção de ontem."
+
+    def _abrir(self, cliente, autenticar, qualidade, **campos):
+        return cliente.post(
+            "/api/v1/chamados/",
+            json=corpo_qualidade(qualidade, descricao=self.DESCRICAO, **campos),
+            headers=_comum(autenticar, qualidade),
+        )
+
+    def test_titulo_enviado_e_gravado_e_devolvido(self, cliente, qualidade, sessao, autenticar):
+        resposta = self._abrir(cliente, autenticar, qualidade, titulo=self.TITULO)
+
+        assert resposta.status_code == 201
+        criado = resposta.json()
+        assert criado["titulo"] == self.TITULO
+        assert criado["descricao"] == self.DESCRICAO
+        assert criado["setor_destino"] == "QUALIDADE"
+        assert criado["categoria_id"] is None
+
+        gravado = sessao.get(Chamado, criado["id"])
+        sessao.refresh(gravado)
+        assert gravado.titulo == self.TITULO
+
+    def test_titulo_ausente_continua_gerado_da_descricao(self, cliente, qualidade, autenticar):
+        resposta = self._abrir(cliente, autenticar, qualidade)
+
+        assert resposta.status_code == 201
+        assert resposta.json()["titulo"] == derivar_titulo(self.DESCRICAO)
+        assert resposta.json()["titulo"] == "Leitura 2% acima no peso padrão."
+
+    def test_titulo_e_gravado_sem_os_espacos_das_pontas(self, cliente, qualidade, autenticar):
+        resposta = self._abrir(cliente, autenticar, qualidade, titulo=f"   {self.TITULO}  ")
+
+        assert resposta.status_code == 201
+        assert resposta.json()["titulo"] == self.TITULO
+
+    @pytest.mark.parametrize("tamanho", [10, 200])
+    def test_limites_sao_aceitos(self, cliente, qualidade, autenticar, tamanho):
+        resposta = self._abrir(cliente, autenticar, qualidade, titulo="t" * tamanho)
+
+        assert resposta.status_code == 201
+        assert resposta.json()["titulo"] == "t" * tamanho
+
+    def test_titulo_digitado_nao_e_cortado_em_80(self, cliente, qualidade, autenticar):
+        """O corte em 80 é do título gerado; o digitado vai inteiro."""
+        titulo = "Balança " * 15
+
+        resposta = self._abrir(cliente, autenticar, qualidade, titulo=titulo)
+
+        assert resposta.json()["titulo"] == titulo.strip()
+        assert len(resposta.json()["titulo"]) > 80
+
+    def test_campos_do_servidor_no_corpo_nao_sao_gravados(self, cliente, qualidade, sessao, autenticar):
+        resposta = self._abrir(
+            cliente,
+            autenticar,
+            qualidade,
+            titulo=self.TITULO,
+            protocolo="CHAM-1999-0001",
+            status="Resolvido",
+            versao=99,
+            cancelado=True,
+            arquivado=True,
+        )
+
+        assert resposta.status_code == 201
+        criado = resposta.json()
+        assert criado["protocolo"] != "CHAM-1999-0001"
+        assert criado["status"] == "Aberto"
+        assert criado["cancelado"] is False
+        assert criado["arquivado"] is False
+        gravado = sessao.get(Chamado, criado["id"])
+        sessao.refresh(gravado)
+        assert gravado.versao != 99
+
+    def test_com_titulo_o_solicitante_segue_a_regra_de_sempre(self, cliente, qualidade, autenticar):
+        do_comum = cliente.post(
+            "/api/v1/chamados/",
+            json=corpo_qualidade(qualidade, titulo=self.TITULO, solicitante_id=qualidade["tecnico_id"]),
+            headers=_comum(autenticar, qualidade),
+        )
+        do_admin = cliente.post(
+            "/api/v1/chamados/",
+            json=corpo_qualidade(qualidade, titulo=self.TITULO, solicitante_id=qualidade["comum_id"]),
+            headers=_admin(autenticar, qualidade),
+        )
+
+        assert do_comum.json()["solicitante_id"] == qualidade["comum_id"]
+        assert do_admin.json()["solicitante_id"] == qualidade["comum_id"]
+
+    def test_com_titulo_nao_dispara_o_webhook_da_ti(self, cliente, qualidade, autenticar, webhook):
+        resposta = self._abrir(cliente, autenticar, qualidade, titulo=self.TITULO)
+
+        assert resposta.status_code == 201
+        assert webhook == []
+
+    def test_ti_segue_sem_teto_de_titulo(self, cliente, dados, autenticar, webhook):
+        """O teto de 200 é da Qualidade: a validação da TI não mudou."""
+        resposta = cliente.post(
+            "/api/v1/chamados/",
+            json=corpo_ti(dados, titulo="t" * 201),
+            headers=_comum(autenticar, dados),
+        )
+
+        assert resposta.status_code == 201
+
+
 class TestSolicitanteSegueARegraAtual:
     def test_usuario_comum_abre_para_si_mesmo(self, cliente, qualidade, autenticar):
         resposta = cliente.post(
@@ -436,25 +554,37 @@ class TestRecusasNaoGravamNada:
         assert (("body", "prioridade"), "enum") in self._campos_com_erro(resposta)
         nada_gravado()
 
-    @pytest.mark.parametrize(
-        "campo,valor",
-        [
-            ("titulo", "Título que o formulário da Qualidade não tem"),
-            ("titulo", None),
-            ("categoria_id", 1),
-            ("categoria_id", None),
-        ],
-    )
-    def test_titulo_ou_categoria_enviados_sao_422(
-        self, cliente, qualidade, autenticar, nada_gravado, campo, valor
-    ):
-        resposta = self._post(cliente, autenticar, qualidade, corpo_qualidade(qualidade, **{campo: valor}))
+    @pytest.mark.parametrize("valor", [1, None])
+    def test_categoria_enviada_e_422(self, cliente, qualidade, autenticar, nada_gravado, valor):
+        resposta = self._post(cliente, autenticar, qualidade, corpo_qualidade(qualidade, categoria_id=valor))
 
         assert resposta.status_code == 422
-        erro = next(e for e in resposta.json()["detail"] if e["loc"] == ["body", campo])
+        erro = next(e for e in resposta.json()["detail"] if e["loc"] == ["body", "categoria_id"])
         assert erro["type"] == "nao_se_aplica"
         assert erro["input"] == valor
         nada_gravado()
+
+    @pytest.mark.parametrize(
+        "titulo,tipo",
+        [
+            ("", "string_too_short"),
+            ("          ", "string_too_short"),
+            ("Balança", "string_too_short"),
+            ("  Balança  ", "string_too_short"),
+            ("t" * 201, "string_too_long"),
+            (None, "titulo_nulo"),
+            (12345678901, "string_type"),
+            (["Balança da linha 3"], "string_type"),
+        ],
+        ids=["vazio", "so_espacos", "curto", "curto_com_espacos", "longo", "null", "numero", "lista"],
+    )
+    def test_titulo_invalido_e_422(self, cliente, qualidade, autenticar, nada_gravado, webhook, titulo, tipo):
+        resposta = self._post(cliente, autenticar, qualidade, corpo_qualidade(qualidade, titulo=titulo))
+
+        assert resposta.status_code == 422
+        assert (("body", "titulo"), tipo) in self._campos_com_erro(resposta)
+        nada_gravado()
+        assert webhook == []
 
     def test_responsavel_inexistente_e_400(self, cliente, qualidade, autenticar, nada_gravado, webhook):
         resposta = self._post(
@@ -581,15 +711,25 @@ class TestDocumentacaoBateComAValidacao:
         # Omitir continua sendo o jeito de pedir TI.
         assert "setor_destino" not in alternativas["ChamadoCreate"]["required"]
 
-    @pytest.mark.parametrize("campo", ["titulo", "categoria_id"])
-    def test_qualidade_documenta_titulo_e_categoria_como_proibidos(self, alternativas, campo):
+    def test_qualidade_documenta_categoria_como_proibida(self, alternativas):
         qualidade = alternativas["ChamadoCreateQualidade"]
-        propriedade = qualidade["properties"][campo]
+        propriedade = qualidade["properties"]["categoria_id"]
 
         # `not: {}` recusa qualquer valor, null incluído — como o 422 real.
         assert propriedade["not"] == {}
         assert set(propriedade) <= {"not", "description", "title"}
-        assert campo not in qualidade["required"]
+        assert "categoria_id" not in qualidade["required"]
+
+    def test_qualidade_documenta_titulo_opcional_e_nunca_nulo(self, alternativas):
+        qualidade = alternativas["ChamadoCreateQualidade"]
+        propriedade = qualidade["properties"]["titulo"]
+
+        assert propriedade["type"] == "string"
+        assert propriedade["minLength"] == 10
+        assert propriedade["maxLength"] == 200
+        # Sem `anyOf` com null: a validação recusa null (422).
+        assert "anyOf" not in propriedade and "not" not in propriedade
+        assert "titulo" not in qualidade["required"]
 
     def test_as_alternativas_nao_se_sobrepoem(self, alternativas):
         ti = alternativas["ChamadoCreate"]

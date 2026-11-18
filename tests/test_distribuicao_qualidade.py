@@ -199,12 +199,22 @@ class TestAberturaSemResponsavel:
         assert resposta.status_code == 503
         assert sessao.query(Chamado).count() == antes
 
-    def test_titulo_e_categoria_continuam_recusados(self, cliente, equipe, autenticar):
+    def test_categoria_continua_recusada(self, cliente, equipe, autenticar):
         resposta = cliente.post(
-            f"{API}/", json=_corpo(equipe, titulo="Título que não se aplica"), headers=_comum(autenticar, equipe)
+            f"{API}/", json=_corpo(equipe, categoria_id=1), headers=_comum(autenticar, equipe)
         )
 
         assert resposta.status_code == 422
+
+    def test_titulo_digitado_abre_sem_responsavel(self, cliente, equipe, autenticar):
+        """API-16: o título deixou de ser recusado; a distribuição não muda."""
+        resposta = cliente.post(
+            f"{API}/", json=_corpo(equipe, titulo="Laudo do lote 42 sem assinatura"), headers=_comum(autenticar, equipe)
+        )
+
+        assert resposta.status_code == 201
+        assert resposta.json()["titulo"] == "Laudo do lote 42 sem assinatura"
+        assert resposta.json()["tecnico_responsavel_id"] is None
 
 
 class TestFilaDaQualidade:
