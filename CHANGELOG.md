@@ -12,6 +12,33 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Corrigido — autoria da abertura no histórico (AUD-01)
+- **O histórico "Abertura de chamado" passa a registrar quem abriu.** Quando
+  o administrador abria em nome de outra pessoa, o registro saía com o id do
+  solicitante: a trilha dizia que a pessoa tinha aberto um chamado que ela
+  não abriu. Agora o autor (`historico_chamados.usuario_id`) é o usuário
+  autenticado, como já era em todos os outros registros de histórico.
+- **Autor e solicitante são campos separados.** `chamados.solicitante_id`
+  continua sendo a pessoa escolhida; só o autor do histórico muda. Quem abre
+  para si não vê diferença.
+- Vale para a TI e para a Qualidade, que passam pelo mesmo registro.
+- Quem pode informar `solicitante_id` não muda: só o administrador humano. O
+  usuário comum e a conta de serviço administradora seguem abrindo como eles
+  mesmos.
+- Permissões, SLA, notificações e webhooks não mudam. O aviso da Qualidade
+  já levava o usuário autenticado como autor.
+- **Compatível com o front atual:** o contrato de `GET /historico/...` é o
+  mesmo; muda só o valor de `usuario_id` nas aberturas para terceiros.
+- **Registros antigos não são reescritos.** Aberturas feitas pelo
+  administrador em nome de outra pessoa antes desta entrega continuam com o
+  solicitante como autor. Ao ler a trilha, a data do deploy separa os dois
+  períodos.
+
+#### Ação necessária no deploy
+- Sem migration e sem variável nova. Independe do front. Rollback volta a
+  gravar o solicitante como autor nas aberturas novas; o que foi gravado no
+  período corrigido permanece correto.
+
 ### Alterado — título digitado na abertura da Qualidade (API-16)
 - **`POST /chamados/` com `setor_destino: QUALIDADE` passa a aceitar
   `titulo`.** Enviado, é o que fica gravado: 10 a 200 caracteres, sem os

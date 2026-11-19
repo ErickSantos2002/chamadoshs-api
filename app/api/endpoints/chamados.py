@@ -594,7 +594,7 @@ def criar_chamado(
     registrar_historico(
         db=db,
         chamado_id=chamado.id,
-        usuario_id=solicitante_id,
+        usuario_id=current_user.id,
         acao="Abertura de chamado",
         descricao=f"Chamado aberto com protocolo {protocolo} | {destino}",
         status_novo="Aberto"

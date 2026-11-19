@@ -493,7 +493,9 @@ class TestSolicitanteSegueARegraAtual:
         assert resposta.status_code == 201
         assert resposta.json()["solicitante_id"] == qualidade["comum_id"]
         historico = sessao.query(HistoricoChamado).filter_by(chamado_id=resposta.json()["id"]).one()
-        assert historico.usuario_id == qualidade["comum_id"]
+        # AUD-01: o solicitante é a pessoa escolhida; o autor da abertura é
+        # quem a registrou. Até a API-16 este teste esperava o solicitante aqui.
+        assert historico.usuario_id == qualidade["admin_id"]
 
 
 class TestRecusasNaoGravamNada:
