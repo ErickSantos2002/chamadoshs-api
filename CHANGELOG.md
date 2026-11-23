@@ -12,6 +12,28 @@ cada versão lista o que precisa ser feito além de subir a imagem.
 
 ## [Não publicado]
 
+### Corrigido — paginação determinística da listagem de usuários (API-17)
+- **`GET /usuarios/` passa a devolver os usuários em ordem crescente de
+  `id`.** A consulta paginava sem ordem declarada: o banco podia devolver as
+  linhas em ordens diferentes entre duas páginas, e um usuário se repetia ou
+  faltava. Só apareceria acima de 100 cadastros, que é quando o front
+  começa a pedir a segunda página.
+- **`limit` ganha teto de 500**, o mesmo de `/chamados` e `/eventos`. Acima
+  dele a resposta é **422**, em vez de a API ler a tabela inteira numa
+  requisição. O mínimo continua 1.
+- **O padrão continua 100.** Quem não informa `limit` recebe o mesmo de
+  antes — agora os 100 de menor `id`.
+- Filtros (`setor_id`, `role_id`, `ativo`), permissões e o formato da
+  resposta não mudam. O front 1.11.0, que pede 100 por página, segue
+  funcionando sem alteração.
+- **Limitação conhecida:** a ordem torna as páginas coerentes sobre um
+  conjunto que não muda. Usuário criado ou excluído entre duas requisições
+  ainda pode deslocar as páginas seguintes.
+
+#### Ação necessária no deploy
+- Sem migration e sem variável nova. Independe do front. Um cliente que
+  peça `limit` acima de 500 passa a receber 422; o front não pede.
+
 ### Corrigido — autoria da abertura no histórico (AUD-01)
 - **O histórico "Abertura de chamado" passa a registrar quem abriu.** Quando
   o administrador abria em nome de outra pessoa, o registro saía com o id do
