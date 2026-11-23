@@ -170,7 +170,9 @@ def _garantir_vinculos_existentes(db: Session, dados: dict) -> None:
 @router.get("/", response_model=List[UsuarioResponse])
 def listar_usuarios(
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1),
+    # Teto de 500, o mesmo de /chamados e /eventos (API-17): sem ele o
+    # cliente pedia a tabela inteira numa requisição. Acima do teto é 422.
+    limit: int = Query(100, ge=1, le=500),
     setor_id: int = None,
     role_id: int = None,
     ativo: bool = None,
@@ -188,7 +190,9 @@ def listar_usuarios(
     if ativo is not None:
         query = query.filter(Usuario.ativo == ativo)
 
-    usuarios = query.offset(skip).limit(limit).all()
+    # Ordem declarada (API-17): sem ela o banco devolve as páginas na ordem
+    # que quiser, e um usuário pode se repetir ou faltar entre duas delas.
+    usuarios = query.order_by(Usuario.id.asc()).offset(skip).limit(limit).all()
     return usuarios
 
 
